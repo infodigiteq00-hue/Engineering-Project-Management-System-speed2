@@ -502,4 +502,3 @@ const ResetPasswordSimple = () => {
 };
 
 export default ResetPasswordSimple;
-

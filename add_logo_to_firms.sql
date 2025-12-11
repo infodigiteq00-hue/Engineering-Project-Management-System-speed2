@@ -10,3 +10,4 @@ COMMENT ON COLUMN public.firms.logo_url IS 'URL or path to company logo image fo
 
 
 
+

@@ -20,7 +20,7 @@ const ForgotPassword = () => {
 
     try {
       // Use simple reset password page for the new flow
-      const redirectTo = `${window.location.origin}/reset-password-simple`;
+      const redirectTo = `${window.location.origin}/reset-password`;
       const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
         redirectTo,
       });

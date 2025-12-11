@@ -8,7 +8,6 @@ import RoleBasedRoute from "@/components/RoleBasedRoute";
 import Login from "./pages/Login";
 import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
-import ResetPasswordSimple from "./pages/ResetPasswordSimple";
 import SignUp from "./pages/SignUp";
 import Index from "./pages/Index";
 import NotFound from "./pages/NotFound";
@@ -35,7 +34,6 @@ const App = () => (
             <Route path="/signup" element={<SignUp />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
             <Route path="/reset-password" element={<ResetPassword />} />
-            <Route path="/reset-password-simple" element={<ResetPasswordSimple />} />
 
             {/* Protected routes */}
             <Route path="/" element={<RoleBasedRoute />} />

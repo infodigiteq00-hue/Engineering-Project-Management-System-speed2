@@ -5,7 +5,7 @@ import { Label } from "@/components/ui/label";
 import { supabase } from "@/lib/supabase";
 import { useNavigate } from "react-router-dom";
 
-const ResetPassword = () => {
+const ResetPasswordSimple = () => {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -15,257 +15,278 @@ const ResetPassword = () => {
   const navigate = useNavigate();
 
   useEffect(() => {
-    const verifyToken = async () => {
-      setError(null);
-      try {
-        // First, check if there's already an error in the URL hash (Supabase might have set it)
-        const initialHash = window.location.hash;
-        if (initialHash && initialHash.includes('error=')) {
-          const hashParams = new URLSearchParams(initialHash.substring(1));
-          const hashError = hashParams.get('error');
-          const hashErrorCode = hashParams.get('error_code');
-          const hashErrorDesc = hashParams.get('error_description');
+    let authListener: { data: { subscription: any } } | null = null;
+    let timeoutId: NodeJS.Timeout | null = null;
+
+    const handlePasswordReset = async () => {
+      console.log('🔍 ResetPasswordSimple - Starting verification...');
+      console.log('📍 Current URL:', window.location.href);
+      
+      // Check localStorage directly first (more reliable than getSession)
+      const storageKey = 'sb-ammaosmkgwkamfjhcxik-auth-token';
+      const storedSession = localStorage.getItem(storageKey);
+      
+      console.log('🔍 Checking localStorage for session...', {
+        hasStoredSession: !!storedSession,
+        storageKey
+      });
+      
+      if (storedSession) {
+        try {
+          const sessionData = JSON.parse(storedSession);
+          console.log('📦 Parsed session data:', {
+            hasAccessToken: !!sessionData.access_token,
+            hasUser: !!sessionData.user,
+            hasRefreshToken: !!sessionData.refresh_token,
+            expiresAt: sessionData.expires_at,
+            userEmail: sessionData.user?.email
+          });
           
-          if (hashError || hashErrorCode) {
-            console.error('❌ Error detected in URL hash on page load:', { 
-              error: hashError, 
-              error_code: hashErrorCode,
-              description: hashErrorDesc 
+          // Check if we have valid tokens and user data
+          if (sessionData.access_token && sessionData.user) {
+            // Check if token is not expired
+            const expiresAt = sessionData.expires_at;
+            const now = Math.floor(Date.now() / 1000);
+            const isExpired = expiresAt && expiresAt <= now;
+            
+            console.log('⏰ Token expiry check:', {
+              expiresAt,
+              now,
+              isExpired,
+              timeUntilExpiry: expiresAt ? expiresAt - now : 'N/A'
             });
             
-            if (hashErrorCode === 'otp_expired' || hashError === 'otp_expired' || hashErrorDesc?.includes('expired')) {
-              setError('This password reset link has expired. Please request a new password reset link from the forgot password page.');
+            // For password reset, even if slightly expired, proceed if we have refresh token
+            if (!expiresAt || !isExpired || sessionData.refresh_token) {
+              console.log('✅ Valid session found in localStorage! User:', sessionData.user.email);
+              // If we have valid tokens in localStorage, proceed immediately
+              // This is the key fix - don't wait for getSession() to work
+              setSessionReady(true);
+              return;
             } else {
-              setError(hashErrorDesc || hashError || 'The reset link is invalid or has expired.');
+              console.log('⚠️ Stored session expired and no refresh token, will try to exchange code...');
             }
-            return;
+          } else {
+            console.log('⚠️ Session data missing required fields');
           }
+        } catch (e) {
+          console.warn('⚠️ Failed to parse stored session:', e);
         }
-
-        const url = new URL(window.location.href);
-        const code = url.searchParams.get('code'); // Code from Supabase redirect (preferred)
-        const token = url.searchParams.get('token'); // Fallback for token parameter
-        const tokenHash = url.searchParams.get('token_hash'); // Token hash from email template
-        const type = url.searchParams.get('type');
-        const email = decodeURIComponent(url.searchParams.get('email') || '');
-        
-        // Use token_hash if available, otherwise fall back to token
-        const recoveryToken = tokenHash || token;
-        
-        console.log('🔍 Reset Password - Extracted params:', { 
-          hasCode: !!code,
-          hasToken: !!token,
-          hasTokenHash: !!tokenHash,
-          tokenPreview: recoveryToken ? `${recoveryToken.substring(0, 20)}...` : 'none',
-          codePreview: code ? `${code.substring(0, 20)}...` : 'none',
-          tokenLength: recoveryToken?.length,
-          codeLength: code?.length,
-          type, 
-          email 
-        });
-        
-        // If we have a code from Supabase redirect, use it directly
-        if (code) {
-          console.log('✅ Found code parameter from Supabase redirect, using exchangeCodeForSession...');
-          try {
-            const { data, error: exchangeError } = await supabase.auth.exchangeCodeForSession(window.location.href);
-            
-            if (exchangeError) {
-              console.error('❌ exchangeCodeForSession failed:', exchangeError);
-              setError(exchangeError.message || 'Failed to verify reset code. The link may have expired.');
-              return;
-            }
-            
-            console.log('✅ exchangeCodeForSession succeeded');
-            // Check for session
-            await new Promise(resolve => setTimeout(resolve, 500));
-            const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-            
-            if (sessionError || !session) {
-              setError('Failed to create session. Please try again.');
-              return;
-            }
-            
-            console.log('✅ Session created successfully');
+      } else {
+        console.log('⚠️ No session found in localStorage');
+      }
+      
+      // Wait a moment - Supabase might be processing the code in background (detectSessionInUrl)
+      console.log('⏳ Waiting for Supabase auto-detection (detectSessionInUrl)...');
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      // Check localStorage again (Supabase might have stored it by now)
+      const storedSessionAfterWait = localStorage.getItem(storageKey);
+      if (storedSessionAfterWait) {
+        try {
+          const sessionData = JSON.parse(storedSessionAfterWait);
+          if (sessionData.access_token && sessionData.user) {
+            console.log('✅ Session found in localStorage after wait! User:', sessionData.user.email);
             setSessionReady(true);
             return;
-          } catch (err: any) {
-            console.error('💥 Error in code exchange:', err);
-            setError(err?.message || 'Failed to process reset code.');
-            return;
+          }
+        } catch (e) {
+          // Ignore
+        }
+      }
+      
+      // Fallback: check if session already exists via Supabase
+      const { data: { session: existingSession } } = await supabase.auth.getSession();
+      if (existingSession) {
+        console.log('✅ Session already exists via getSession!');
+        setSessionReady(true);
+        return;
+      }
+
+      // Set up auth state listener BEFORE doing anything
+      console.log('👂 Setting up auth state listener...');
+      authListener = supabase.auth.onAuthStateChange((event, session) => {
+        console.log('🔔 Auth state changed:', event, session ? 'has session' : 'no session');
+        if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+          if (session) {
+            console.log('✅ Session detected via listener! User:', session.user?.email);
+            setSessionReady(true);
+            if (timeoutId) clearTimeout(timeoutId);
           }
         }
+      });
+
+      try {
+        // Extract code from URL
+        const urlParams = new URLSearchParams(window.location.search);
+        const code = urlParams.get('code');
+        const hashParams = new URLSearchParams(window.location.hash.substring(1));
+        const hashCode = hashParams.get('code');
+        const hashError = hashParams.get('error');
         
-        // Validate all required parameters
-        if (!recoveryToken && !code) {
-          setError('Invalid reset link: token or code is missing');
-          return;
-        }
-
-        if (type !== 'recovery') {
-          setError('Invalid reset link: incorrect type');
-          return;
-        }
-
-        if (!email) {
-          setError('Invalid reset link: email is missing');
-          return;
-        }
-
-        // If we have a code, we already handled it above, so we shouldn't reach here
-        // But if we do have a recoveryToken, process it
-        if (!recoveryToken) {
-          return; // Should have been handled by code path above
-        }
-
-        // Check if token is a PKCE code (starts with "pkce_")
-        const isPkceCode = recoveryToken.startsWith('pkce_');
-        
-        console.log('🔐 Verifying recovery token...', { 
-          type: 'recovery', 
-          email, 
-          tokenLength: recoveryToken.length,
-          tokenPreview: recoveryToken.substring(0, 15),
-          isPkceCode,
-          hasTokenHash: !!tokenHash
+        console.log('🔍 Extracted params:', {
+          codeFromParams: code ? 'found' : 'none',
+          codeFromHash: hashCode ? 'found' : 'none',
+          hashError: hashError || 'none'
         });
-
-        try {
-          // Check URL hash for Supabase error messages first
-          const hashParams = new URLSearchParams(window.location.hash.substring(1));
-          const hashError = hashParams.get('error');
+        
+        // Check for errors first
+        if (hashError) {
           const hashErrorDesc = hashParams.get('error_description');
-          const hashErrorCode = hashParams.get('error_code');
+          console.error('❌ Error in hash:', hashError);
+          setError(hashErrorDesc || hashError || 'The reset link is invalid or has expired.');
+          return;
+        }
+
+        // Use code from URL params or hash
+        const recoveryCode = code || hashCode;
+
+        if (!recoveryCode) {
+          console.error('❌ No code found in URL');
+          setError('Invalid reset link. No code found. Please request a new password reset.');
+          return;
+        }
+
+        console.log('✅ Code found. Attempting exchange...');
+        
+        const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+        
+        if (!supabaseUrl) {
+          setError('Missing Supabase configuration');
+          return;
+        }
+
+        // Set timeout
+        timeoutId = setTimeout(() => {
+          if (!sessionReady) {
+            console.error('⏱️ Operation timed out');
+            setError('Request timed out. Please try again or request a new reset link.');
+          }
+        }, 15000);
+
+        // Try the simplest approach: use exchangeCodeForSession with just the code
+        // But wrap it in a Promise.race with timeout
+        try {
+          console.log('🔄 Attempting exchangeCodeForSession...');
           
-          if (hashError || hashErrorCode) {
-            console.error('❌ Error in URL hash:', { error: hashError, error_code: hashErrorCode, description: hashErrorDesc });
-            if (hashErrorCode === 'otp_expired' || hashError === 'otp_expired' || hashErrorDesc?.includes('expired')) {
-              setError('This password reset link has expired. Please request a new password reset link.');
-            } else {
-              setError(hashErrorDesc || hashError || 'The reset link is invalid or has expired.');
-            }
+          const exchangePromise = supabase.auth.exchangeCodeForSession(recoveryCode);
+          const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Exchange timeout after 8 seconds')), 8000)
+          );
+
+          const result = await Promise.race([exchangePromise, timeoutPromise]) as any;
+          
+          if (result?.error) {
+            console.error('❌ Exchange error:', result.error);
+            setError(result.error.message || 'Failed to verify reset link. It may have expired.');
             return;
           }
 
-          // For PKCE codes or token_hash, we need to redirect to Supabase's auth endpoint
-          // Supabase will process the token_hash and redirect back with a code parameter
-          if (isPkceCode || tokenHash) {
-            console.log('🔄 Token hash detected - redirecting to Supabase auth endpoint...');
-            
-            // Extract the actual hash (remove pkce_ prefix if present)
-            const actualTokenHash = recoveryToken.startsWith('pkce_') ? recoveryToken.substring(5) : recoveryToken;
-            
-            // Construct Supabase auth verify URL
-            const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-            const redirectTo = `${window.location.origin}${window.location.pathname}`;
-            
-            // Use token_hash parameter (Supabase's expected parameter name)
-            const verifyUrl = `${supabaseUrl}/auth/v1/verify?token_hash=${encodeURIComponent(actualTokenHash)}&type=recovery&redirect_to=${encodeURIComponent(redirectTo)}`;
-            
-            console.log('📍 Redirecting to Supabase verify endpoint...', { 
-              tokenHashLength: actualTokenHash.length,
-              redirectTo 
-            });
-            
-            // Redirect - Supabase will process and redirect back with code parameter
-            window.location.href = verifyUrl;
-            return; // Component will unmount, new page load will handle the code
-          } else {
-            // For non-PKCE tokens, use verifyOtp
-            console.log('🔄 Using verifyOtp for recovery token...');
-            const { data: verifyData, error: verifyError } = await supabase.auth.verifyOtp({
-              type: 'recovery',
-              email: email,
-              token: recoveryToken,
-            });
-
-            if (verifyError) {
-              console.error('❌ verifyOtp failed:', verifyError);
-              setError(verifyError.message || 'Failed to verify reset token. The link may have expired or is invalid.');
-              return;
-            }
-            
-            console.log('✅ verifyOtp succeeded');
+          if (result?.data?.session) {
+            console.log('✅ Session created! User:', result.data.session.user?.email);
+            setSessionReady(true);
+            if (timeoutId) clearTimeout(timeoutId);
+            return;
           }
 
-          // Wait a moment for Supabase to process the session
-          await new Promise(resolve => setTimeout(resolve, 500));
-          
-          console.log('🔍 Checking for session...');
+          // Wait and check session
+          await new Promise(resolve => setTimeout(resolve, 1000));
           const { data: { session }, error: sessionError } = await supabase.auth.getSession();
           
           if (sessionError) {
             console.error('❌ Session check error:', sessionError);
-            setError('Failed to create session. Please try again.');
+            setError('Failed to verify session. Please try again.');
             return;
           }
 
-          if (!session) {
-            console.error('❌ No session created after successful verification');
-            // Try one more time after a short delay
-            await new Promise(resolve => setTimeout(resolve, 1000));
-            const { data: { session: retrySession } } = await supabase.auth.getSession();
-            
-            if (retrySession) {
-              console.log('✅ Session created on retry');
-              setSessionReady(true);
-              return;
-            }
-            
-            setError('Failed to create session. Please request a new password reset link.');
-            return;
-          }
-
-          console.log('✅ Token verified and session created successfully!');
-          console.log('Session details:', { 
-            user: session.user?.email, 
-            expiresAt: session.expires_at,
-            accessToken: session.access_token ? 'present' : 'missing'
-          });
-          setSessionReady(true);
-        } catch (apiErr: any) {
-          console.error('💥 API verification exception:', apiErr);
-          
-          // Check for existing session as fallback
-          const { data: { session: fallbackSession } } = await supabase.auth.getSession();
-          if (fallbackSession) {
-            console.log('✅ Found existing session as fallback');
+          if (session) {
+            console.log('✅ Session verified! User:', session.user?.email);
             setSessionReady(true);
+            if (timeoutId) clearTimeout(timeoutId);
             return;
           }
+
+          setError('Session creation failed. Please request a new reset link.');
           
-          // Check if error is about expired token
-          if (apiErr?.message?.includes('expired') || apiErr?.message?.includes('CORS')) {
-            // Check URL hash for Supabase error
-            const hashParams = new URLSearchParams(window.location.hash.substring(1));
-            const hashError = hashParams.get('error');
-            const hashErrorDesc = hashParams.get('error_description');
+        } catch (err: any) {
+          console.error('💥 Exchange exception:', err);
+          
+          // If timeout, try REST API as fallback
+          if (err.message?.includes('timeout')) {
+            console.log('⏱️ SDK timed out, trying REST API fallback...');
             
-            if (hashError === 'otp_expired' || hashErrorDesc?.includes('expired')) {
-              setError('This password reset link has expired. Please request a new password reset link from the forgot password page.');
-            } else {
-              setError('The reset link is invalid or has expired. Please request a new password reset link.');
+            try {
+              const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+              const response = await fetch(`${supabaseUrl}/auth/v1/token?grant_type=pkce`, {
+                method: 'POST',
+                headers: {
+                  'apikey': supabaseKey,
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  auth_code: recoveryCode,
+                }),
+              });
+
+              if (response.ok) {
+                const tokenData = await response.json();
+                if (tokenData.access_token && tokenData.refresh_token) {
+                  const { data: sessionData, error: setError } = await supabase.auth.setSession({
+                    access_token: tokenData.access_token,
+                    refresh_token: tokenData.refresh_token,
+                  });
+                  
+                  if (sessionData?.session) {
+                    console.log('✅ Session set via REST API!');
+                    setSessionReady(true);
+                    if (timeoutId) clearTimeout(timeoutId);
+                    return;
+                  }
+                }
+              }
+              
+              const errorText = await response.text();
+              console.error('❌ REST API fallback failed:', errorText);
+            } catch (restErr) {
+              console.error('💥 REST API fallback exception:', restErr);
             }
-          } else {
-            setError(apiErr?.message || 'Failed to verify reset token. Please check your connection and try again.');
           }
+          
+          setError(err?.message || 'Failed to process reset code. Please try again.');
         }
+        
       } catch (err: any) {
-        console.error('💥 Reset password exception:', err);
-        setError(err?.message || "Failed to verify reset link. Please check the console for details.");
+        console.error('💥 Reset password error:', err);
+        setError(err?.message || 'Failed to process reset link.');
       }
     };
-    
-    verifyToken();
-  }, []);
+
+    handlePasswordReset();
+
+    // Cleanup
+    return () => {
+      if (authListener) {
+        authListener.data.subscription.unsubscribe();
+      }
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    };
+  }, [sessionReady]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!sessionReady) return;
+    
+    if (!sessionReady) {
+      setError('Please wait for the reset link to be verified.');
+      return;
+    }
+
     if (password.length < 6) {
       setError("Password must be at least 6 characters");
       return;
     }
+
     if (password !== confirmPassword) {
       setError("Passwords do not match");
       return;
@@ -274,18 +295,127 @@ const ResetPassword = () => {
     setLoading(true);
     setError(null);
     setMessage(null);
+
     try {
-      const { error: updErr } = await supabase.auth.updateUser({ password });
-      if (updErr) {
-        setError(updErr.message);
+      console.log('🔄 Updating password...');
+      
+      // Skip getSession() entirely - it's hanging. Use localStorage directly
+      console.log('📡 Step 1: Getting session from localStorage...');
+      const storageKey = 'sb-ammaosmkgwkamfjhcxik-auth-token';
+      const storedSession = localStorage.getItem(storageKey);
+      
+      if (!storedSession) {
+        setError('No session found. Please request a new password reset link.');
         setLoading(false);
         return;
       }
-      setMessage("Password updated successfully. Redirecting to login...");
-      setTimeout(() => navigate('/login'), 1200);
+      
+      let sessionData;
+      try {
+        sessionData = JSON.parse(storedSession);
+        if (!sessionData.access_token || !sessionData.user) {
+          setError('Invalid session. Please request a new password reset link.');
+          setLoading(false);
+          return;
+        }
+        console.log('✅ Session found in localStorage:', { userEmail: sessionData.user.email });
+      } catch (e) {
+        console.error('❌ Failed to parse localStorage session:', e);
+        setError('Invalid session data. Please request a new password reset link.');
+        setLoading(false);
+        return;
+      }
+      
+      // Use REST API directly - skip all SDK methods that might hang
+      console.log('📡 Step 2: Updating password via REST API...');
+      
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+      
+      if (!supabaseUrl || !supabaseKey) {
+        setError('Missing Supabase configuration');
+        setLoading(false);
+        return;
+      }
+
+      // Check if token is expired - if so, refresh it first
+      const expiresAt = sessionData.expires_at;
+      const now = Math.floor(Date.now() / 1000);
+      let accessToken = sessionData.access_token;
+      
+      if (expiresAt && expiresAt <= now && sessionData.refresh_token) {
+        console.log('🔄 Token expired, refreshing via REST API...');
+        try {
+          const refreshResponse = await fetch(`${supabaseUrl}/auth/v1/token?grant_type=refresh_token`, {
+            method: 'POST',
+            headers: {
+              'apikey': supabaseKey,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              refresh_token: sessionData.refresh_token,
+            }),
+          });
+          
+          if (refreshResponse.ok) {
+            const refreshData = await refreshResponse.json();
+            accessToken = refreshData.access_token;
+            console.log('✅ Token refreshed!');
+            // Update localStorage
+            sessionData.access_token = refreshData.access_token;
+            sessionData.refresh_token = refreshData.refresh_token;
+            sessionData.expires_at = refreshData.expires_at || Math.floor(Date.now() / 1000) + refreshData.expires_in;
+            localStorage.setItem(storageKey, JSON.stringify(sessionData));
+          } else {
+            console.warn('⚠️ Token refresh failed, proceeding with expired token');
+          }
+        } catch (refreshErr) {
+          console.warn('⚠️ Token refresh error, proceeding with expired token:', refreshErr);
+        }
+      }
+      
+      // Update password via REST API
+      console.log('📡 Step 3: Calling password update API...');
+      const controller = new AbortController();
+      const fetchTimeout = setTimeout(() => controller.abort(), 10000);
+      
+      const response = await fetch(`${supabaseUrl}/auth/v1/user`, {
+        method: 'PUT',
+        headers: {
+          'apikey': supabaseKey,
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ password }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(fetchTimeout);
+      console.log('📡 Password update response status:', response.status);
+      
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        console.error('❌ Password update error:', errorData);
+        setError(errorData.message || errorData.error_description || 'Failed to update password');
+        setLoading(false);
+        return;
+      }
+
+      console.log('✅ Password updated successfully!');
+      setMessage("Password updated successfully! Redirecting to login...");
+      setLoading(false);
+      
+      // Clear session and redirect
+      localStorage.removeItem(storageKey);
+      setTimeout(() => navigate('/login'), 2000);
+      
     } catch (err: any) {
-      setError(err?.message || "Failed to update password");
-    } finally {
+      console.error('💥 Password update exception:', err);
+      if (err.name === 'AbortError') {
+        setError('Password update timed out. Please check your connection and try again.');
+      } else {
+        setError(err?.message || "Failed to update password. Please try again.");
+      }
       setLoading(false);
     }
   };
@@ -295,22 +425,22 @@ const ResetPassword = () => {
       <div className="w-full max-w-md">
         <div className="text-center mb-6 sm:mb-8">
           <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 mb-1 sm:mb-2">Reset Password</h1>
-          <p className="text-sm sm:text-base text-gray-600">Enter a new password for your account</p>
+          <p className="text-sm sm:text-base text-gray-600">Enter your new password</p>
         </div>
 
         <div className="bg-white rounded-xl shadow-lg p-5 sm:p-8">
           {!sessionReady ? (
-            <div>
+            <div className="text-center py-4">
               {error ? (
-                <div className="text-red-600 text-xs sm:text-sm bg-red-50 p-2 sm:p-3 rounded-md">{error}</div>
+                <div className="text-red-600 text-sm bg-red-50 p-3 rounded-md">{error}</div>
               ) : (
-                <div className="text-sm sm:text-base text-gray-600">Validating reset link...</div>
+                <div className="text-gray-600">Verifying reset link...</div>
               )}
             </div>
           ) : (
-            <form onSubmit={handleSubmit} className="space-y-3 sm:space-y-4">
+            <form onSubmit={handleSubmit} className="space-y-4">
               <div>
-                <Label htmlFor="password" className="text-xs sm:text-sm font-medium text-gray-700">
+                <Label htmlFor="password" className="text-sm font-medium text-gray-700">
                   New Password
                 </Label>
                 <Input
@@ -325,7 +455,7 @@ const ResetPassword = () => {
               </div>
 
               <div>
-                <Label htmlFor="confirmPassword" className="text-xs sm:text-sm font-medium text-gray-700">
+                <Label htmlFor="confirmPassword" className="text-sm font-medium text-gray-700">
                   Confirm New Password
                 </Label>
                 <Input
@@ -340,28 +470,24 @@ const ResetPassword = () => {
               </div>
 
               {error && (
-                <div className="text-red-600 text-xs sm:text-sm bg-red-50 p-2 sm:p-3 rounded-md">
-                  {error}
-                </div>
+                <div className="text-red-600 text-sm bg-red-50 p-3 rounded-md">{error}</div>
               )}
 
               {message && (
-                <div className="text-green-700 text-xs sm:text-sm bg-green-50 p-2 sm:p-3 rounded-md">
-                  {message}
-                </div>
+                <div className="text-green-700 text-sm bg-green-50 p-3 rounded-md">{message}</div>
               )}
 
               <Button
                 type="submit"
                 disabled={loading}
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 px-3 sm:px-4 rounded-md font-medium transition-colors text-sm"
+                className="w-full bg-green-600 hover:bg-green-700 text-white py-2 px-4 rounded-md font-medium"
               >
-                {loading ? "Updating..." : "Update password"}
+                {loading ? "Updating..." : "Update Password"}
               </Button>
             </form>
           )}
 
-          <div className="text-center mt-4 sm:mt-6">
+          <div className="text-center mt-6">
             <button
               onClick={() => navigate('/login')}
               className="text-blue-600 hover:text-blue-700 font-medium text-sm"
@@ -375,7 +501,4 @@ const ResetPassword = () => {
   );
 };
 
-export default ResetPassword;
-
-
-
+export default ResetPasswordSimple;
