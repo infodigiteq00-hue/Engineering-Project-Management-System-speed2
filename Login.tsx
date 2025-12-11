@@ -24,75 +24,7 @@ const Login = () => {
 
   // Clear stale auth data on component mount - MORE AGGRESSIVE CLEANUP
   useEffect(() => {
-    const clearStaleAuthData = async () => {
-      try {
-        // console.log('🧹 AGGRESSIVE: Clearing ALL stale auth data...');
-        
-        // 1. Force sign out from Supabase (clears session)
-        try {
-          await supabase.auth.signOut();
-          // console.log('✅ Supabase session cleared');
-        } catch (signOutError) {
-          console.warn('⚠️ SignOut warning (non-fatal):', signOutError);
-          // Continue with localStorage cleanup even if signOut fails
-        }
-        
-        // 2. Clear ALL localStorage items (Supabase stores tokens here)
-        const allKeys = Object.keys(localStorage);
-        const supabaseKeys = allKeys.filter(key => 
-          key.startsWith('sb-') || 
-          key.includes('supabase') ||
-          key.includes('auth') ||
-          key === 'userData' || 
-          key === 'userRole' || 
-          key === 'userName' || 
-          key === 'userEmail' || 
-          key === 'firmId' || 
-          key === 'userId' ||
-          key === 'sb-access-token' ||
-          key === 'sb-refresh-token'
-        );
-        
-        supabaseKeys.forEach(key => {
-          // console.log('🗑️ Removing localStorage key:', key);
-          localStorage.removeItem(key);
-        });
-        
-        // 3. Clear ALL sessionStorage
-        sessionStorage.clear();
-        // console.log('✅ SessionStorage cleared');
-        
-        // 4. Force Supabase to refresh its internal state
-        try {
-          const { data: { session } } = await supabase.auth.getSession();
-          if (session) {
-            console.warn('⚠️ Session still exists after cleanup, forcing removal...');
-            await supabase.auth.signOut();
-            // Clear localStorage again
-            supabaseKeys.forEach(key => localStorage.removeItem(key));
-            // Wait for cleanup
-            await new Promise(resolve => setTimeout(resolve, 100));
-          }
-        } catch (e) {
-          console.warn('⚠️ Session check failed (non-fatal):', e);
-        }
-        
-        // console.log('✅ ALL stale auth data cleared');
-      } catch (error) {
-        console.error('❌ Error clearing stale auth data:', error);
-        // Even if cleanup fails, clear localStorage manually
-        try {
-          const allKeys = Object.keys(localStorage);
-          allKeys.filter(key => key.startsWith('sb-') || key.includes('auth')).forEach(key => {
-            localStorage.removeItem(key);
-          });
-        } catch (e) {
-          console.error('❌ Failed to clear localStorage:', e);
-        }
-      }
-    };
-
-    clearStaleAuthData();
+    
     
     // Cleanup timeout on unmount
     return () => {
