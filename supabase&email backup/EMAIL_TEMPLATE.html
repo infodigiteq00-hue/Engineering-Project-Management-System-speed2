@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Welcome Email Template</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Inter', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f8fafc;
+            line-height: 1.6;
+        }
+        
+        .email-container {
+            max-width: 600px;
+            margin: 0 auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 30px 20px;
+            text-align: center;
+            color: white;
+        }
+        
+        .header h1 {
+            margin: 0;
+            font-size: 28px;
+            font-weight: 700;
+            text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+        }
+        
+        .header p {
+            margin: 10px 0 0 0;
+            font-size: 16px;
+            opacity: 0.9;
+        }
+        
+        .content {
+            padding: 40px 30px;
+        }
+        
+        .welcome-section {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .welcome-section h2 {
+            color: #2d3748;
+            font-size: 24px;
+            margin: 0 0 10px 0;
+            font-weight: 600;
+        }
+        
+        .welcome-section p {
+            color: #4a5568;
+            font-size: 16px;
+            margin: 0;
+        }
+        
+        .info-card {
+            background: linear-gradient(135deg, #f7fafc 0%, #edf2f7 100%);
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+            border-left: 4px solid #667eea;
+        }
+        
+        .info-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        
+        .info-item:last-child {
+            border-bottom: none;
+        }
+        
+        .info-label {
+            font-weight: 600;
+            color: #2d3748;
+            font-size: 14px;
+        }
+        
+        .info-value {
+            color: #4a5568;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        
+        .cta-button {
+            display: inline-block;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            text-decoration: none;
+            padding: 15px 30px;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 16px;
+            text-align: center;
+            margin: 20px 0;
+            box-shadow: 0 4px 6px rgba(102, 126, 234, 0.3);
+            transition: all 0.3s ease;
+        }
+        
+        .cta-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 12px rgba(102, 126, 234, 0.4);
+        }
+        
+        .footer {
+            background-color: #f7fafc;
+            padding: 30px;
+            text-align: center;
+            border-top: 1px solid #e2e8f0;
+        }
+        
+        .footer p {
+            color: #718096;
+            font-size: 14px;
+            margin: 5px 0;
+        }
+        
+        .footer a {
+            color: #667eea;
+            text-decoration: none;
+            font-weight: 500;
+        }
+        
+        .footer a:hover {
+            text-decoration: underline;
+        }
+        
+        .logo {
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 8px;
+            display: inline-block;
+            margin-bottom: 15px;
+        }
+        
+        @media (max-width: 600px) {
+            .email-container {
+                margin: 0;
+                border-radius: 0;
+            }
+            
+            .content {
+                padding: 30px 20px;
+            }
+            
+            .header {
+                padding: 20px 15px;
+            }
+            
+            .header h1 {
+                font-size: 24px;
+            }
+            
+            .info-item {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 5px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="email-container">
+        <!-- Header -->
+        <div class="header">
+            <div class="logo"></div>
+            <h1>Engineering Project Management</h1>
+            <p>Welcome to the Future of Project Management</p>
+        </div>
+        
+        <!-- Content -->
+        <div class="content">
+            <div class="welcome-section">
+                <h2>Welcome, {{to_name}}! 🎉</h2>
+                <p>Your account has been successfully created and you're ready to get started.</p>
+            </div>
+            
+            <div class="info-card">
+                <div class="info-item">
+                    <span class="info-label">Company:</span>
+                    <span class="info-value">{{company_name}}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Your Role:</span>
+                    <span class="info-value">{{role}}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Login Email:</span>
+                    <span class="info-value">{{to_email}}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Project:</span>
+                    <span class="info-value">{{project_name}}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Equipment:</span>
+                    <span class="info-value">{{equipment_name}}</span>
+                </div>
+            </div>
+            
+            <div style="text-align: center; margin: 30px 0;">
+                <!-- UPDATED: Button text and URL for signup -->
+                <a href="https://engineering-project-dashboard.vercel.app/signup" class="cta-button" style="display: inline-block; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white !important; text-decoration: none; padding: 15px 30px; border-radius: 8px; font-weight: 600; font-size: 16px; text-align: center; margin: 20px 0; box-shadow: 0 4px 6px rgba(102, 126, 234, 0.3); transition: all 0.3s ease;">🚀 Create Your Account</a>
+                
+            </div>
+            
+            <div style="background-color: #f0f9ff; border-radius: 8px; padding: 20px; margin: 20px 0;">
+                <h3 style="color: #0369a1; margin: 0 0 10px 0; font-size: 18px;">Next Steps:</h3>
+                <ul style="color: #0c4a6e; margin: 0; padding-left: 20px;">
+                    <li>Click "Create Your Account" to set up your password</li>
+                    <li>Use your email: <strong>{{to_email}}</strong></li>
+                    <li>Choose a secure password</li>
+                    <li>Access your personalized dashboard</li>
+                </ul>
+            </div>
+        </div>
+        
+        <!-- Footer -->
+        <div class="footer">
+            <p><strong>Need Help?</strong></p>
+            <p>Our support team is here to assist you every step of the way.</p>
+            <p>Email us at <a href="mailto:info.digiteq00@gmail.com">info.digiteq00@gmail.com</a></p>
+            <p style="margin-top: 20px; font-size: 12px; color: #a0aec0;">
+                © 2024 Engineering Project Management. All rights reserved.
+            </p>
+        </div>
+    </div>
+</body>
+</html>
