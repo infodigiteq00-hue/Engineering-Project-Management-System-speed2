@@ -302,7 +302,7 @@ const EquipmentCard: React.FC<EquipmentCardProps> = ({
           </div>
         </div>
 
-        {/* Progress Phase Selector and Certification Title */}
+        {/* Progress Phase Selector and Any Personal Title */}
         <div className="flex flex-col items-end gap-2 sm:gap-3 sm:ml-4">
           <select
             value={equipment.progressPhase}

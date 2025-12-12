@@ -22,6 +22,7 @@ import { logProgressEntryAdded, logProgressEntryUpdated, logProgressEntryDeleted
 import { sendProjectTeamEmailNotification, getDashboardUrl } from "@/lib/notifications";
 import { Equipment, ProgressEntry } from "@/types/equipment";
 import { transformEquipmentData } from "@/utils/equipmentTransform";
+import { getCache, setCache, prefetchWithCache, CACHE_KEYS } from "@/utils/cache";
 import axios from "axios";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
@@ -1207,10 +1208,80 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
         // Set loading state for progress images
         setIsLoadingProgressImages(true);
         
-      // Check if this is standalone equipment
-      const freshEquipment = projectId === 'standalone' 
-        ? await fastAPI.getStandaloneEquipment() 
-        : await fastAPI.getEquipmentByProject(projectId);
+        // Create cache key for this project's equipment
+        const cacheKey = projectId === 'standalone' 
+          ? `${CACHE_KEYS.EQUIPMENT}_standalone`
+          : `${CACHE_KEYS.EQUIPMENT}_${projectId}`;
+        
+        // Helper function to create lightweight equipment metadata (no images/audio/documents)
+        const createLightweightEquipment = (equipment: any[]) => {
+          return equipment.map((eq: any) => ({
+            ...eq,
+            // Keep only metadata, remove heavy data
+            progress_images: [], // Don't cache image URLs - load on-demand
+            progress_images_metadata: eq.progress_images_metadata?.map((img: any) => ({
+              id: img.id,
+              description: img.description,
+              uploaded_by: img.uploaded_by,
+              upload_date: img.upload_date,
+              // Don't include image_url - load on-demand
+            })) || [],
+            progress_entries: eq.progress_entries?.map((entry: any) => ({
+              id: entry.id,
+              text: entry.text || entry.entry_text,
+              date: entry.date || entry.created_at,
+              type: entry.type,
+              created_at: entry.created_at,
+              // Don't include audio_data - load on-demand
+            })) || [],
+            documents: [], // Don't cache documents - load on-demand
+            images: [], // Don't cache images - load on-demand
+          }));
+        };
+        
+        // Check cache first for lightweight metadata
+        const cachedEquipment = getCache<any[]>(cacheKey);
+        if (cachedEquipment !== null && Array.isArray(cachedEquipment) && cachedEquipment.length > 0) {
+          // Use cached metadata immediately, but fetch fresh data with images/audio/documents in background
+          const transformedCached = transformEquipmentDataCallback(cachedEquipment);
+          if (!abortController.signal.aborted) {
+            setLocalEquipment(transformedCached);
+            setIsLoadingProgressImages(false);
+          }
+          
+          // Fetch fresh data in background (with images/audio/documents)
+          const freshEquipment = projectId === 'standalone' 
+            ? await fastAPI.getStandaloneEquipment() 
+            : await fastAPI.getEquipmentByProject(projectId);
+          
+          // Check if request was aborted
+          if (abortController.signal.aborted) {
+            devLog('⏹️ refreshEquipmentData: Request aborted');
+            return;
+          }
+          
+          const equipmentArray = Array.isArray(freshEquipment) ? freshEquipment : [];
+          const transformedEquipment = transformEquipmentDataCallback(equipmentArray);
+          
+          // Cache lightweight version
+          const lightweight = createLightweightEquipment(equipmentArray);
+          setCache(cacheKey, lightweight, { 
+            ttl: 5 * 60 * 1000, // 5 minutes TTL
+            maxSize: 2 * 1024 * 1024 // 2MB max per project
+          });
+          
+          // Update with fresh data
+          if (!abortController.signal.aborted) {
+            setLocalEquipment(transformedEquipment);
+            setIsLoadingProgressImages(false);
+          }
+          return;
+        }
+        
+        // No cache, fetch fresh data
+        const freshEquipment = projectId === 'standalone' 
+          ? await fastAPI.getStandaloneEquipment() 
+          : await fastAPI.getEquipmentByProject(projectId);
         
         // Check if request was aborted
         if (abortController.signal.aborted) {
@@ -1220,10 +1291,18 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
         
         devLog('🔄 refreshEquipmentData: Fresh equipment data received, type:', typeof freshEquipment, 'isArray:', Array.isArray(freshEquipment));
 
-      // Ensure freshEquipment is an array
-      const equipmentArray = Array.isArray(freshEquipment) ? freshEquipment : [];
+        // Ensure freshEquipment is an array
+        const equipmentArray = Array.isArray(freshEquipment) ? freshEquipment : [];
         devLog('🔄 refreshEquipmentData: Equipment array length:', equipmentArray.length);
-      const transformedEquipment = transformEquipmentDataCallback(equipmentArray);
+        
+        // Cache lightweight version (metadata only, no images/audio/documents)
+        const lightweight = createLightweightEquipment(equipmentArray);
+        setCache(cacheKey, lightweight, { 
+          ttl: 5 * 60 * 1000, // 5 minutes TTL
+          maxSize: 2 * 1024 * 1024 // 2MB max per project
+        });
+        
+        const transformedEquipment = transformEquipmentDataCallback(equipmentArray);
         devLog('🔄 refreshEquipmentData: Transformed equipment count:', transformedEquipment.length);
         
         // Check again if request was aborted before updating state
@@ -1344,6 +1423,84 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
   useEffect(() => {
     setCurrentPage(1);
   }, [selectedPhase, searchQuery, projectId]);
+
+  // Pre-cache next page equipment metadata when user navigates pages
+  useEffect(() => {
+    const preCacheNextPage = async () => {
+      if (!localEquipment || localEquipment.length === 0) return;
+      
+      const totalPages = Math.ceil(localEquipment.length / itemsPerPage);
+      const nextPage = currentPage + 1;
+      
+      // Only pre-cache if next page exists and we haven't cached it yet
+      if (nextPage <= totalPages) {
+        const cacheKey = projectId === 'standalone' 
+          ? `${CACHE_KEYS.EQUIPMENT}_standalone`
+          : `${CACHE_KEYS.EQUIPMENT}_${projectId}`;
+        
+        // Check current cache
+        const cached = getCache<any[]>(cacheKey);
+        if (cached && Array.isArray(cached)) {
+          const nextPageStartIndex = nextPage * itemsPerPage;
+          const nextPageEndIndex = nextPageStartIndex + itemsPerPage;
+          
+          // Check if we already have next page data in cache
+          if (cached.length >= nextPageEndIndex) {
+            // Already cached, skip
+            return;
+          }
+        }
+        
+        // Pre-cache next page in background (non-blocking)
+        try {
+          const freshEquipment = projectId === 'standalone' 
+            ? await fastAPI.getStandaloneEquipment() 
+            : await fastAPI.getEquipmentByProject(projectId);
+          
+          if (freshEquipment && Array.isArray(freshEquipment)) {
+            // For standalone: only cache first 24 total (3 pages)
+            // For projects: cache all (but lightweight)
+            const equipmentToCache = projectId === 'standalone' 
+              ? freshEquipment.slice(0, 24) // Limit to 24 for standalone
+              : freshEquipment;
+            
+            // Create lightweight version (metadata only)
+            const lightweight = equipmentToCache.map((eq: any) => ({
+              ...eq,
+              progress_images: [],
+              progress_images_metadata: eq.progress_images_metadata?.map((img: any) => ({
+                id: img.id,
+                description: img.description,
+                uploaded_by: img.uploaded_by,
+                upload_date: img.upload_date,
+              })) || [],
+              progress_entries: eq.progress_entries?.map((entry: any) => ({
+                id: entry.id,
+                text: entry.text || entry.entry_text,
+                date: entry.date || entry.created_at,
+                type: entry.type,
+                created_at: entry.created_at,
+              })) || [],
+              documents: [],
+              images: [],
+            }));
+            
+            // Update cache with lightweight version
+            setCache(cacheKey, lightweight, {
+              ttl: projectId === 'standalone' ? 10 * 60 * 1000 : 5 * 60 * 1000,
+              maxSize: 2 * 1024 * 1024
+            });
+          }
+        } catch (error) {
+          // Silently fail - pre-caching shouldn't break the app
+          console.warn(`Failed to pre-cache next page for ${projectId}:`, error);
+        }
+      }
+    };
+    
+    // Pre-cache next page when current page changes
+    preCacheNextPage();
+  }, [currentPage, localEquipment, projectId, itemsPerPage]);
 
   const [documents, setDocuments] = useState<Record<string, Array<{ id: string, file?: File, name: string, uploadedBy: string, uploadDate: string, document_url?: string, document_name?: string }>>>({});
   const [newDocumentName, setNewDocumentName] = useState('');
@@ -2035,7 +2192,7 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
 
       // Add certification title
       if (editFormData.certificationTitle !== undefined) {
-        equipmentData.certification_title = editFormData.certificationTitle || null;
+        equipmentData.any_personal_title = editFormData.certificationTitle || null;
       }
 
       // Only include team member fields if they have actual values (not empty/undefined)
@@ -7263,7 +7420,7 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
                             />
                           </div>
                           <div>
-                            <Label className="text-xs text-gray-600">Certification Title</Label>
+                            <Label className="text-xs text-gray-600">Any Personal Title</Label>
                             {!showNewCertificationInput[item.id] ? (
                               <Select
                                 value={editFormData.certificationTitle || undefined}
@@ -7277,7 +7434,7 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
                                 }}
                               >
                                 <SelectTrigger className="text-xs h-8">
-                                  <SelectValue placeholder="Select certification title" />
+                                  <SelectValue placeholder="Select Any Personal Title" />
                                 </SelectTrigger>
                                 <SelectContent>
                                   {allCertificationTitles.length > 0 && (
@@ -7301,7 +7458,7 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
                             ) : (
                               <div className="flex gap-1">
                                 <Input
-                                  placeholder="Enter certification title"
+                                  placeholder="Enter Any Personal Title"
                                   value={newCertificationTitle}
                                   onChange={(e) => setNewCertificationTitle(e.target.value)}
                                   className="text-xs h-8 flex-1"
@@ -7762,7 +7919,7 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
                           <SelectItem value="dispatched">Dispatched</SelectItem>
                         </SelectContent>
                       </Select>
-                      {/* Certification Title - Capsule UI below status dropdown */}
+                      {/* Any Personal Title - Capsule UI below status dropdown */}
                       {item.certificationTitle && (
                         <span className="bg-blue-100 text-blue-800 text-xs font-medium px-2.5 py-0.5 rounded-full">
                           {item.certificationTitle}

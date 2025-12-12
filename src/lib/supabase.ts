@@ -178,7 +178,7 @@ export interface Database {
           custom_fields?: Array<{name: string, value: string}>
           technical_sections?: Array<{name: string, customFields: Array<{name: string, value: string}>}>
           team_custom_fields?: Array<{name: string, value: string}>
-          certification_title?: string
+          any_personal_title?: string
           created_at: string
           updated_at: string
         }
@@ -211,7 +211,7 @@ export interface Database {
           custom_fields?: Array<{name: string, value: string}>
           technical_sections?: Array<{name: string, customFields: Array<{name: string, value: string}>}>
           team_custom_fields?: Array<{name: string, value: string}>
-          certification_title?: string
+          any_personal_title?: string
           created_at?: string
           updated_at?: string
         }
@@ -244,7 +244,7 @@ export interface Database {
           custom_fields?: Array<{name: string, value: string}>
           technical_sections?: Array<{name: string, customFields: Array<{name: string, value: string}>}>
           team_custom_fields?: Array<{name: string, value: string}>
-          certification_title?: string
+          any_personal_title?: string
           created_at?: string
           updated_at?: string
         }

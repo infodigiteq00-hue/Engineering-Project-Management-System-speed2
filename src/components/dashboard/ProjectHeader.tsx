@@ -48,8 +48,19 @@ const ProjectHeader: React.FC<ProjectHeaderProps> = ({ loading, userName, userRo
     try {
       console.log('🚪 Logout initiated...');
       
-      // IMMEDIATE: Clear ALL storage first (don't wait for async)
+      // IMMEDIATE: Clear ALL storage first (but preserve critical caches)
+      // Use synchronous approach to preserve critical caches
+      const tabCounters = localStorage.getItem('epms_cache_tab_counters');
+      const summaryStats = localStorage.getItem('epms_cache_summary_stats');
+      const standaloneEquipment = localStorage.getItem('epms_cache_equipment_standalone');
+      
       localStorage.clear();
+      
+      // Restore critical caches immediately
+      if (tabCounters) localStorage.setItem('epms_cache_tab_counters', tabCounters);
+      if (summaryStats) localStorage.setItem('epms_cache_summary_stats', summaryStats);
+      if (standaloneEquipment) localStorage.setItem('epms_cache_equipment_standalone', standaloneEquipment);
+      
       sessionStorage.clear();
       
       // IMMEDIATE: Force redirect right away (don't wait for signOut)
@@ -72,8 +83,18 @@ const ProjectHeader: React.FC<ProjectHeaderProps> = ({ loading, userName, userRo
       
     } catch (error) {
       console.error('❌ Error during logout:', error);
-      // Even if everything fails, clear storage and force redirect
-      localStorage.clear();
+      // Even if everything fails, try to preserve critical caches
+      try {
+        const tabCounters = localStorage.getItem('epms_cache_tab_counters');
+        const summaryStats = localStorage.getItem('epms_cache_summary_stats');
+        const standaloneEquipment = localStorage.getItem('epms_cache_equipment_standalone');
+        
+        localStorage.clear();
+        
+        if (tabCounters) localStorage.setItem('epms_cache_tab_counters', tabCounters);
+        if (summaryStats) localStorage.setItem('epms_cache_summary_stats', summaryStats);
+        if (standaloneEquipment) localStorage.setItem('epms_cache_equipment_standalone', standaloneEquipment);
+      } catch {}
       sessionStorage.clear();
       window.location.replace('/login');
     }

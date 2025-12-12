@@ -4,6 +4,7 @@ import { activityApi } from '@/lib/activityApi';
 import axios from 'axios';
 import { Clock, User, FileText, CheckCircle, Send, Play, Pause, X, Eye, Search } from 'lucide-react';
 import { Input } from '@/components/ui/input';
+// Company highlights caching removed - will be re-implemented with metadata-only caching later
 
 interface CompanyHighlightsProps {
   onSelectProject?: (projectId: string, initialTab?: string) => void;
@@ -216,7 +217,7 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
       
       try {
         if (productionSubTab === 'key-progress') {
-          // Fetch progress images for Key Progress tab
+          // Fetch progress images for Key Progress tab (no caching for now - will cache metadata only later)
           const images = await fastAPI.getAllProgressImages(
             dateRangeStart, 
             dateRangeEnd,
@@ -230,7 +231,7 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
             setLoading(false); // Only set loading to false after data is set
           }
         } else {
-          // Fetch progress entries for All Updates tab
+          // Fetch progress entries for All Updates tab (no caching for now - will cache metadata only later)
           const entries = await fastAPI.getAllProgressEntries(
             dateRangeStart, 
             dateRangeEnd,

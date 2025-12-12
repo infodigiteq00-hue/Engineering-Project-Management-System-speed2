@@ -380,7 +380,7 @@ const StandaloneEquipmentCard: React.FC<StandaloneEquipmentCardProps> = (props) 
                             />
                           </div>
                           <div>
-                            <Label className="text-xs text-gray-600">Certification Title</Label>
+                            <Label className="text-xs text-gray-600">Any Personal Title</Label>
                             {!showNewCertificationInput[item.id] ? (
                               <Select
                                 value={editFormData.certificationTitle || undefined}
@@ -394,7 +394,7 @@ const StandaloneEquipmentCard: React.FC<StandaloneEquipmentCardProps> = (props) 
                                 }}
                               >
                                 <SelectTrigger className="text-xs h-8">
-                                  <SelectValue placeholder="Select certification title" />
+                                  <SelectValue placeholder="Select Any Personal Title" />
                                 </SelectTrigger>
                                 <SelectContent>
                                   {allCertificationTitles.length > 0 && (
@@ -418,7 +418,7 @@ const StandaloneEquipmentCard: React.FC<StandaloneEquipmentCardProps> = (props) 
                             ) : (
                               <div className="flex gap-1">
                                 <Input
-                                  placeholder="Enter certification title"
+                                  placeholder="Enter Any Personal Title"
                                   value={newCertificationTitle}
                                   onChange={(e) => setNewCertificationTitle(e.target.value)}
                                   className="text-xs h-8 flex-1"
@@ -777,7 +777,7 @@ const StandaloneEquipmentCard: React.FC<StandaloneEquipmentCardProps> = (props) 
                           <SelectItem value="dispatched">Dispatched</SelectItem>
                         </SelectContent>
                       </Select>
-                      {/* Certification Title - Capsule UI below status dropdown */}
+                      {/* Any Personal Title- Capsule UI below status dropdown */}
                       {item.certificationTitle && (
                         <span className="bg-blue-100 text-blue-800 text-xs font-medium px-2.5 py-0.5 rounded-full">
                           {item.certificationTitle}

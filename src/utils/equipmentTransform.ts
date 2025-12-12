@@ -59,7 +59,7 @@ export const transformEquipmentData = (dbEquipment: any[]): Equipment[] => {
       welderRole: eq.welder_role || 'viewer',
       qcInspectorRole: eq.qc_inspector_role || 'viewer',
       projectManagerRole: eq.project_manager_role || 'viewer',
-      certificationTitle: eq.certification_title || '',
+      certificationTitle: eq.any_personal_title || '',
       // Dynamic team positions
       customTeamPositions: eq.custom_team_positions || [],
       // Custom fields

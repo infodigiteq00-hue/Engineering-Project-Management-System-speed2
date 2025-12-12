@@ -44,7 +44,8 @@ const RoleBasedRoute = () => {
         
         if (sessionError || !session) {
           // console.log('❌ No valid session, clearing storage and redirecting to login');
-          localStorage.clear();
+          const { safeLocalStorageClear } = await import('@/utils/cache');
+          safeLocalStorageClear();
           window.location.href = '/login';
           return;
         }
@@ -156,7 +157,8 @@ const RoleBasedRoute = () => {
   const handleSignOut = async () => {
     try {
       await supabase.auth.signOut();
-      localStorage.clear();
+      const { safeLocalStorageClear } = await import('@/utils/cache');
+      safeLocalStorageClear();
       navigate('/login');
     } catch (error) {
       // Error signing out

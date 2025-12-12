@@ -394,6 +394,14 @@ const Login = () => {
       // console.log('🎯 User role for redirect:', userData.role);
       // console.log('🎯 Firm ID:', userData.firm_id);
       
+      // Clear cache on login to ensure fresh data
+      try {
+        const { clearCache } = await import('@/utils/cache');
+        clearCache();
+      } catch (cacheError) {
+        console.warn('⚠️ Cache clear error (non-fatal):', cacheError);
+      }
+
       // Store in localStorage with error handling
       try {
         localStorage.setItem('userData', JSON.stringify(userInfo));

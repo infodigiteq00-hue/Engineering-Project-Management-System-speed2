@@ -1,5 +1,6 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { Button } from "@/components/ui/button";
+import { getCache, setCache, CACHE_KEYS } from "@/utils/cache";
 
 interface Project {
   id: string;
@@ -85,6 +86,8 @@ const CompletionCertificatesTab = ({
 }: CompletionCertificatesTabProps) => {
   const [certificateTab, setCertificateTab] = useState<'all' | 'pending' | 'received'>('all');
   const [templatesDropdownExpanded, setTemplatesDropdownExpanded] = useState(false);
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const itemsPerPage = 8;
 
   // Compute statistics
   const completedProjectsCount = useMemo(() => {
@@ -119,6 +122,49 @@ const CompletionCertificatesTab = ({
     }
     return completed;
   }, [projects, certificateTab]);
+
+  // Pagination: Calculate total pages and slice projects
+  const totalPages = Math.ceil(filteredCompletedProjects.length / itemsPerPage);
+  const startIndex = (currentPage - 1) * itemsPerPage;
+  const endIndex = startIndex + itemsPerPage;
+  const paginatedCompletedProjects = filteredCompletedProjects.slice(startIndex, endIndex);
+
+  // Reset to page 1 when tab changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [certificateTab]);
+
+  // Cache completed projects metadata (first 24, metadata only)
+  useEffect(() => {
+    const completed = projects.filter(p => p.status === 'completed');
+    const first24 = completed.slice(0, 24);
+    
+    // Create lightweight version (metadata only, no equipment arrays)
+    const lightweight = first24.map((p: any) => ({
+      id: p.id,
+      name: p.name,
+      client: p.client,
+      location: p.location,
+      equipmentCount: p.equipmentCount,
+      activeEquipment: p.activeEquipment,
+      progress: p.progress,
+      status: p.status,
+      manager: p.manager,
+      deadline: p.deadline,
+      completedDate: p.completedDate,
+      poNumber: p.poNumber,
+      equipmentBreakdown: p.equipmentBreakdown,
+      recommendationLetter: p.recommendationLetter,
+      // Don't include equipment array - load on-demand
+      equipment: []
+    }));
+    
+    const cacheKey = `${CACHE_KEYS.PROJECT_CARDS}_completed`;
+    setCache(cacheKey, lightweight, { 
+      ttl: 10 * 60 * 1000, // 10 minutes TTL
+      maxSize: 1 * 1024 * 1024 // 1MB max
+    });
+  }, [projects]);
 
   return (
     <div className="mt-8">
@@ -280,13 +326,17 @@ const CompletionCertificatesTab = ({
             {certificateTab === 'received' && 'Received Certificates'}
           </h3>
           <p className="text-sm text-gray-500">
-            Showing {filteredCompletedProjects.length} of {projects.filter(p => p.status === 'completed').length} completed projects
+            Showing {paginatedCompletedProjects.length} of {filteredCompletedProjects.length} completed projects
+            {filteredCompletedProjects.length > itemsPerPage && (
+              <span className="ml-2">(Page {currentPage} of {totalPages})</span>
+            )}
           </p>
         </div>
         
         {filteredCompletedProjects.length > 0 ? (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {filteredCompletedProjects.map((project) => {
+          <>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {paginatedCompletedProjects.map((project) => {
               // Check if deadline is valid
               const hasValidDeadline = project.deadline && !isNaN(new Date(project.deadline).getTime());
               
@@ -851,6 +901,7 @@ const CompletionCertificatesTab = ({
                         variant="outline" 
                         size="sm"
                         onClick={(e) => {
+                          e.preventDefault();
                           e.stopPropagation();
                           onSelectProject(project.id, "equipment");
                         }}
@@ -867,6 +918,7 @@ const CompletionCertificatesTab = ({
                         variant="outline" 
                         size="sm"
                         onClick={(e) => {
+                          e.preventDefault();
                           e.stopPropagation();
                           onSelectProject(project.id, "vdcr");
                         }}
@@ -882,6 +934,7 @@ const CompletionCertificatesTab = ({
                         variant="outline" 
                         size="sm"
                         onClick={(e) => {
+                          e.preventDefault();
                           e.stopPropagation();
                           onSelectProject(project.id, "project-details");
                         }}
@@ -898,8 +951,64 @@ const CompletionCertificatesTab = ({
                   </div>
                 </div>
               );
-            })}
-          </div>
+              })}
+            </div>
+            
+            {/* Pagination Controls */}
+            {totalPages > 1 && (
+              <div className="mt-8 flex items-center justify-between bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+                <div className="text-sm text-gray-600">
+                  Showing {startIndex + 1} to {Math.min(endIndex, filteredCompletedProjects.length)} of {filteredCompletedProjects.length} projects
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                    disabled={currentPage === 1}
+                    className="px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Previous
+                  </button>
+                  
+                  <div className="flex gap-1">
+                    {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => {
+                      let pageNum;
+                      if (totalPages <= 5) {
+                        pageNum = i + 1;
+                      } else if (currentPage <= 3) {
+                        pageNum = i + 1;
+                      } else if (currentPage >= totalPages - 2) {
+                        pageNum = totalPages - 4 + i;
+                      } else {
+                        pageNum = currentPage - 2 + i;
+                      }
+                      
+                      return (
+                        <button
+                          key={pageNum}
+                          onClick={() => setCurrentPage(pageNum)}
+                          className={`px-3 py-1.5 text-sm font-medium rounded-md ${
+                            currentPage === pageNum
+                              ? 'bg-blue-600 text-white'
+                              : 'text-gray-700 bg-white border border-gray-300 hover:bg-gray-50'
+                          }`}
+                        >
+                          {pageNum}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  
+                  <button
+                    onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                    disabled={currentPage >= totalPages}
+                    className="px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
         ) : (
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-12 text-center">
             <svg className="w-16 h-16 text-gray-400 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

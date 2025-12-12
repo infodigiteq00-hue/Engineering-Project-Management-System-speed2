@@ -1910,11 +1910,14 @@ export const fastAPI = {
 
   // Get all progress entries across all projects (for company highlights)
   // PERFORMANCE: Simplified query to prevent statement timeouts (same fix as getAllProgressImages)
-  async getAllProgressEntries(startDate?: string, endDate?: string, projectIds?: string[]) {
+  async getAllProgressEntries(startDate?: string, endDate?: string, projectIds?: string[], limit?: number, offset?: number) {
     try {
       // CRITICAL FIX: Simplified query - removed complex nested joins that cause timeouts
       // Fetch only essential fields first, then fetch related data separately
-      let url = `/equipment_progress_entries?select=id,equipment_id,entry_text,entry_type,created_at,created_by,audio_data,audio_duration,image_url,image_description&order=created_at.desc&limit=200`;
+      // Support pagination with limit and offset
+      const pageLimit = limit || 200; // Default 200, but can be overridden for pagination
+      const pageOffset = offset || 0;
+      let url = `/equipment_progress_entries?select=id,equipment_id,entry_text,entry_type,created_at,created_by,audio_data,audio_duration,image_url,image_description&order=created_at.desc&limit=${pageLimit}&offset=${pageOffset}`;
       if (startDate) {
         url += `&created_at=gte.${startDate}`;
       }
@@ -2047,11 +2050,14 @@ export const fastAPI = {
 
   // Get all progress images (for company highlights - Key Progress section)
   // PERFORMANCE: Simplified query to prevent statement timeouts
-  async getAllProgressImages(startDate?: string, endDate?: string, projectIds?: string[]) {
+  async getAllProgressImages(startDate?: string, endDate?: string, projectIds?: string[], limit?: number, offset?: number) {
     try {
       // CRITICAL FIX: Simplified query - removed complex nested joins that cause timeouts
       // Fetch only essential fields first, then fetch related data separately if needed
-      let url = `/equipment_progress_images?select=id,equipment_id,image_url,description,uploaded_by,upload_date,created_at,audio_data,audio_duration&order=created_at.desc&limit=200`;
+      // Support pagination with limit and offset
+      const pageLimit = limit || 200; // Default 200, but can be overridden for pagination
+      const pageOffset = offset || 0;
+      let url = `/equipment_progress_images?select=id,equipment_id,image_url,description,uploaded_by,upload_date,created_at,audio_data,audio_duration&order=created_at.desc&limit=${pageLimit}&offset=${pageOffset}`;
       if (startDate) {
         url += `&created_at=gte.${startDate}`;
       }

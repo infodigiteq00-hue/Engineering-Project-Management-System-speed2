@@ -11,7 +11,8 @@ const NoPermission: React.FC = () => {
   const handleSignOut = async () => {
     try {
       await supabase.auth.signOut();
-      localStorage.clear();
+      const { safeLocalStorageClear } = await import('@/utils/cache');
+      safeLocalStorageClear();
       navigate('/login');
     } catch (error) {
       console.error('Error signing out:', error);

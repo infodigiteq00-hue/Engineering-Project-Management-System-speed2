@@ -17,6 +17,7 @@ import { useToast } from "@/hooks/use-toast";
 import axios from "axios";
 import { logProjectCreated, logProjectUpdated, logProjectDeleted } from "@/lib/activityLogger";
 import { generateRecommendationLetterWord } from "@/utils/wordGenerator";
+import { getCache, setCache, prefetchWithCache, CACHE_KEYS, clearCache, removeCache, initializeCacheCleanup } from "@/utils/cache";
 
 
 
@@ -105,6 +106,74 @@ const Index = () => {
   const [currentPage, setCurrentPage] = useState<number>(1);
   const itemsPerPage = 8;
 
+  // Cached summary stats state (for instant display)
+  const [cachedSummaryStats, setCachedSummaryStats] = useState<{ totalProjects: number; totalEquipment: number } | null>(null);
+  
+  // Cached tab counters state (for instant display - NEVER CLEAR)
+  const [cachedTabCounters, setCachedTabCounters] = useState<{ 
+    projects: number; 
+    standaloneEquipment: number; 
+    completionCertificates: number;
+  } | null>(null);
+
+  // Initialize cache cleanup on app startup
+  useEffect(() => {
+    initializeCacheCleanup();
+  }, []);
+
+  // Load cached summary stats on mount for instant display
+  useEffect(() => {
+    const cachedStats = getCache<{ totalProjects: number; totalEquipment: number }>(CACHE_KEYS.SUMMARY_STATS);
+    if (cachedStats) {
+      setCachedSummaryStats(cachedStats);
+    }
+  }, []);
+
+  // Load cached tab counters on mount for instant display (NEVER CLEAR)
+  useEffect(() => {
+    const cachedCounters = getCache<{ 
+      projects: number; 
+      standaloneEquipment: number; 
+      completionCertificates: number;
+    }>(CACHE_KEYS.TAB_COUNTERS);
+    if (cachedCounters) {
+      setCachedTabCounters(cachedCounters);
+    }
+  }, []);
+
+  // Prefetch standalone equipment and completion certificates counts on mount
+  useEffect(() => {
+    const prefetchCounts = async () => {
+      try {
+        // Prefetch standalone equipment count
+        const standaloneEquipmentData = await fastAPI.getStandaloneEquipment();
+        const standaloneCount = Array.isArray(standaloneEquipmentData) ? standaloneEquipmentData.length : 0;
+        
+        // Get completion certificates count from projects (use existing projects state if available)
+        const completedCount = projects.filter((p: any) => p.status === 'completed').length;
+        
+        // Update tab counters cache
+        const tabCounters = {
+          projects: cachedTabCounters?.projects ?? totalProjects,
+          standaloneEquipment: standaloneCount,
+          completionCertificates: completedCount
+        };
+        setCache(CACHE_KEYS.TAB_COUNTERS, tabCounters, { ttl: 24 * 60 * 60 * 1000 });
+        setCachedTabCounters(tabCounters);
+      } catch (error) {
+        console.warn('Failed to prefetch counts:', error);
+      }
+    };
+    
+    // Prefetch counts in background (non-blocking) if we don't have cached values
+    if (!cachedTabCounters) {
+      prefetchCounts();
+    } else if (cachedTabCounters.standaloneEquipment === 0 || cachedTabCounters.completionCertificates === 0) {
+      // If cached values are 0, try to prefetch (might be stale)
+      prefetchCounts();
+    }
+  }, []); // Run once on mount
+
   // Load user data from localStorage on component mount
   useEffect(() => {
     // Load and set user data from localStorage
@@ -168,13 +237,45 @@ const Index = () => {
         // Fetch projects from Supabase with role-based filtering
         const userRole = localStorage.getItem('userRole');
         const userId = localStorage.getItem('userId');
-        const supabaseProjects = await fastAPI.getProjectsByFirm(firmId, userRole || undefined, userId || undefined);
+        
+        // Create cache key based on user context
+        const cacheKey = `${CACHE_KEYS.PROJECT_CARDS}_${firmId}_${userRole || 'none'}_${userId || 'none'}`;
+        
+        // Check cache first for instant display
+        const cachedProjects = getCache<any[]>(cacheKey);
+        if (cachedProjects !== null && Array.isArray(cachedProjects) && cachedProjects.length > 0) {
+          // Use cached data immediately (already filtered to active projects only, max 24)
+          setProjects(cachedProjects);
+          setFilteredProjects(cachedProjects);
+          setLoading(false);
+          
+          // Fetch fresh data in background (fire and forget)
+          fetchFreshProjects(firmId, userRole || undefined, userId || undefined, cacheKey).catch(() => {
+            // Silently fail background refresh
+          });
+          return;
+        }
+        
+        // No cache, fetch fresh data
+        setLoading(true);
+        await fetchFreshProjects(firmId, userRole || undefined, userId || undefined, cacheKey);
+        
+      } catch (error) {
+        console.error('❌ Error fetching projects from Supabase:', error);
+        setLoading(false);
+      }
+    };
+
+    // Helper function to fetch and transform projects
+    const fetchFreshProjects = async (firmId: string, userRole?: string, userId?: string, cacheKey?: string) => {
+      try {
+        const supabaseProjects = await fastAPI.getProjectsByFirm(firmId, userRole, userId);
         
         if (supabaseProjects && Array.isArray(supabaseProjects) && supabaseProjects.length > 0) {
           
           // Transform Supabase data to match our project structure
           const transformedProjects = await Promise.all((supabaseProjects as any[]).map(async (project: any) => {
-            // Fetch equipment data for this project
+            // Fetch equipment data for this project (for breakdown calculation)
             let equipmentData = [];
             let equipmentBreakdown = {};
             try {
@@ -202,7 +303,8 @@ const Index = () => {
             } catch (error) {
             }
 
-            return {
+            // Create lightweight project metadata for caching (without full equipment arrays)
+            const projectMetadata = {
             id: project.id,
             name: project.name,
             client: project.client,
@@ -227,14 +329,12 @@ const Index = () => {
                 project.services_included) : [],
             consultant: project.consultant || 'ABC Consultants',
             tpiAgency: project.tpi_agency || 'Bureau Veritas',
-            // clientFocalPoint: project.client_focal_point || project.manager || 'TBD',
             clientFocalPoint: project.client_focal_point || 'Not specified',
             vdcrManager: project.vdcr_manager || 'Quality Team Lead',
             kickoffMeetingNotes: project.kickoff_meeting_notes || '',
             specialProductionNotes: project.special_production_notes || '',
             equipmentBreakdown: equipmentBreakdown,
-            equipment: equipmentData,
-            // Document data - transform to expected structure
+            // Document metadata (just names, not full data)
             unpricedPOFile: project.unpriced_po_documents && project.unpriced_po_documents.length > 0 ? 
               { name: project.unpriced_po_documents[0].document_name, uploaded: true, type: 'PDF' } : null,
             designInputsPID: project.design_inputs_documents && project.design_inputs_documents.length > 0 ? 
@@ -251,19 +351,48 @@ const Index = () => {
             recommendationLetter: project.recommendation_letter || {
               status: 'not-requested' as const,
               reminderCount: 0
-            }
+            },
+            // Don't include full equipment array in cached metadata - it's too large
+            // Equipment will be cached separately per-project when needed
+            equipment: [] // Empty array for cached version - will be loaded on-demand
+          };
+          
+          // Return full version with equipment for immediate use
+          return {
+            ...projectMetadata,
+            equipment: equipmentData // Include equipment for current session
           };
           }));
 
           // Update state with Supabase data
           setProjects(transformedProjects as any);
           setFilteredProjects(transformedProjects as any);
+          setLoading(false);
           
+          // Cache the transformed projects (metadata only, without full equipment arrays)
+          // Only cache active projects (not completed), limit to 24 projects max
+          if (cacheKey) {
+            // Filter out completed projects and limit to 24
+            const activeProjects = transformedProjects
+              .filter((p: any) => p.status !== 'completed')
+              .slice(0, 24); // Limit to 24 projects max
+            
+            // Create lightweight version without equipment arrays for caching
+            const lightweightProjects = activeProjects.map((p: any) => ({
+              ...p,
+              equipment: [] // Remove equipment array to save space
+            }));
+            setCache(cacheKey, lightweightProjects, { 
+              ttl: 10 * 60 * 1000, // 10 minutes TTL
+              maxSize: 1 * 1024 * 1024 // 1MB max for project cards cache
+            });
+          }
         } else {
+          setLoading(false);
         }
-        
       } catch (error) {
         console.error('❌ Error fetching projects from Supabase:', error);
+        setLoading(false);
       }
     };
 
@@ -294,16 +423,105 @@ const Index = () => {
   const [mainTab, setMainTab] = useState<'projects' | 'equipment' | 'tasks' | 'certificates'>('projects');
 
   // Fetch standalone equipment when equipment tab is active
+  // Cache first 24 equipments (first 3 pages) and preserve cache on refresh
   useEffect(() => {
     const fetchStandaloneEquipment = async () => {
       if (mainTab === 'equipment') {
         try {
           setStandaloneEquipmentLoading(true);
+          
+          const cacheKey = `${CACHE_KEYS.EQUIPMENT}_standalone`;
+          
+          // Check cache first for instant display
+          const cachedEquipment = getCache<any[]>(cacheKey);
+          if (cachedEquipment !== null && Array.isArray(cachedEquipment) && cachedEquipment.length > 0) {
+            // Use cached data immediately (limited to 24 items)
+            const limitedCached = cachedEquipment.slice(0, 24);
+            setStandaloneEquipment(limitedCached);
+            setStandaloneEquipmentLoading(false);
+            
+            // Fetch fresh data in background (fire and forget)
+            fastAPI.getStandaloneEquipment()
+              .then((equipment) => {
+                if (equipment && Array.isArray(equipment)) {
+                  // Cache only first 24 equipments (first 3 pages × 8 per page)
+                  const first24 = equipment.slice(0, 24);
+                  
+                  // Create lightweight version (metadata only, no images/audio/documents)
+                  const lightweight = first24.map((eq: any) => ({
+                    ...eq,
+                    progress_images: [],
+                    progress_images_metadata: eq.progress_images_metadata?.map((img: any) => ({
+                      id: img.id,
+                      description: img.description,
+                      uploaded_by: img.uploaded_by,
+                      upload_date: img.upload_date,
+                    })) || [],
+                    progress_entries: eq.progress_entries?.map((entry: any) => ({
+                      id: entry.id,
+                      text: entry.text || entry.entry_text,
+                      date: entry.date || entry.created_at,
+                      type: entry.type,
+                      created_at: entry.created_at,
+                    })) || [],
+                    documents: [],
+                    images: [],
+                  }));
+                  
+                  setCache(cacheKey, lightweight, {
+                    ttl: 10 * 60 * 1000, // 10 minutes TTL (longer for standalone)
+                    maxSize: 2 * 1024 * 1024 // 2MB max
+                  });
+                  
+                  // Update state with fresh data (first 24)
+                  setStandaloneEquipment(first24);
+                }
+              })
+              .catch((error) => {
+                console.warn('Background refresh failed for standalone equipment:', error);
+              });
+            return;
+          }
+          
+          // No cache, fetch fresh data
           const equipment = await fastAPI.getStandaloneEquipment();
           
-          // Pass raw data to EquipmentGrid - it will transform it using transformEquipmentData
-          // This ensures certification_title and other fields are properly mapped
-          setStandaloneEquipment(equipment);
+          if (equipment && Array.isArray(equipment)) {
+            // Cache only first 24 equipments (first 3 pages × 8 per page)
+            const first24 = equipment.slice(0, 24);
+            
+            // Create lightweight version (metadata only, no images/audio/documents)
+            const lightweight = first24.map((eq: any) => ({
+              ...eq,
+              progress_images: [],
+              progress_images_metadata: eq.progress_images_metadata?.map((img: any) => ({
+                id: img.id,
+                description: img.description,
+                uploaded_by: img.uploaded_by,
+                upload_date: img.upload_date,
+              })) || [],
+              progress_entries: eq.progress_entries?.map((entry: any) => ({
+                id: entry.id,
+                text: entry.text || entry.entry_text,
+                date: entry.date || entry.created_at,
+                type: entry.type,
+                created_at: entry.created_at,
+              })) || [],
+              documents: [],
+              images: [],
+            }));
+            
+            // Cache lightweight version
+            setCache(cacheKey, lightweight, {
+              ttl: 10 * 60 * 1000, // 10 minutes TTL (longer for standalone)
+              maxSize: 2 * 1024 * 1024 // 2MB max
+            });
+            
+            // Set first 24 for display
+            setStandaloneEquipment(first24);
+          } else {
+            setStandaloneEquipment([]);
+          }
         } catch (error) {
           console.error('❌ Error fetching standalone equipment:', error);
           toast({
@@ -415,6 +633,72 @@ const Index = () => {
   const endProjectIndex = startProjectIndex + itemsPerPage;
   const paginatedProjects = currentProjects.slice(startProjectIndex, endProjectIndex);
   
+  // Pre-cache equipment metadata for visible projects (8 projects on current page)
+  // This runs in background - doesn't block UI, just prepares data for instant load
+  useEffect(() => {
+    const preCacheVisibleProjectsEquipment = async () => {
+      // Only pre-cache for active projects (not completed) and only the 8 visible ones
+      const visibleActiveProjects = paginatedProjects.filter((p: any) => p.status !== 'completed');
+      
+      if (visibleActiveProjects.length === 0) return;
+      
+      // Pre-cache equipment metadata for each visible project in background (non-blocking)
+      visibleActiveProjects.forEach(async (project: any) => {
+        try {
+          const cacheKey = `${CACHE_KEYS.EQUIPMENT}_${project.id}`;
+          
+          // Check if already cached
+          const cached = getCache<any[]>(cacheKey);
+          if (cached !== null) {
+            // Already cached, skip
+            return;
+          }
+          
+          // Fetch equipment metadata in background (non-blocking)
+          const equipment = await fastAPI.getEquipmentByProject(project.id);
+          if (equipment && Array.isArray(equipment) && equipment.length > 0) {
+            // Create lightweight version (metadata only, no images/audio/documents)
+            const lightweight = equipment.map((eq: any) => ({
+              ...eq,
+              progress_images: [], // Don't cache image URLs
+              progress_images_metadata: eq.progress_images_metadata?.map((img: any) => ({
+                id: img.id,
+                description: img.description,
+                uploaded_by: img.uploaded_by,
+                upload_date: img.upload_date,
+                // No image_url - load on-demand
+              })) || [],
+              progress_entries: eq.progress_entries?.map((entry: any) => ({
+                id: entry.id,
+                text: entry.text || entry.entry_text,
+                date: entry.date || entry.created_at,
+                type: entry.type,
+                created_at: entry.created_at,
+                // No audio_data - load on-demand
+              })) || [],
+              documents: [], // Don't cache documents
+              images: [], // Don't cache images
+            }));
+            
+            // Cache lightweight equipment metadata
+            setCache(cacheKey, lightweight, {
+              ttl: 5 * 60 * 1000, // 5 minutes TTL
+              maxSize: 2 * 1024 * 1024 // 2MB max per project
+            });
+          }
+        } catch (error) {
+          // Silently fail - pre-caching shouldn't break the app
+          console.warn(`Failed to pre-cache equipment for project ${project.id}:`, error);
+        }
+      });
+    };
+    
+    // Only pre-cache if we have visible projects and we're on the projects tab
+    if (paginatedProjects.length > 0 && mainTab === 'projects' && !selectedProject) {
+      preCacheVisibleProjectsEquipment();
+    }
+  }, [paginatedProjects, currentPage, mainTab, selectedProject]);
+
   // Reset to page 1 when tab changes or if current page is out of bounds
   useEffect(() => {
     if (currentPage > totalProjectPages && totalProjectPages > 0) {
@@ -529,6 +813,35 @@ const Index = () => {
   const totalProjects = nonCompletedProjects.length;
   const totalEquipment = nonCompletedProjects.reduce((sum, project) => sum + project.equipmentCount, 0);
 
+  // Cache tab counters (NEVER CLEAR - critical for first glance UI)
+  useEffect(() => {
+    const tabCounters = {
+      projects: totalProjects,
+      standaloneEquipment: standaloneEquipment.length,
+      completionCertificates: completedProjects.length
+    };
+    // Cache with very long TTL (24 hours) - these should persist
+    setCache(CACHE_KEYS.TAB_COUNTERS, tabCounters, { ttl: 24 * 60 * 60 * 1000 }); // 24 hours TTL
+    setCachedTabCounters(tabCounters);
+  }, [totalProjects, standaloneEquipment.length, completedProjects.length]);
+
+  // Cache summary stats when projects change and filters are at default (no active filters)
+  useEffect(() => {
+    // Only cache when no filters are active (default view)
+    if (activeFilters.client === 'All Clients' && 
+        activeFilters.manager === 'All Managers' && 
+        activeFilters.equipmentType === 'All Equipment' && 
+        !activeFilters.searchQuery &&
+        projects.length > 0) {
+      const summaryStats = {
+        totalProjects,
+        totalEquipment
+      };
+      setCache(CACHE_KEYS.SUMMARY_STATS, summaryStats, { ttl: 10 * 60 * 1000 }); // 10 minutes TTL
+      setCachedSummaryStats(summaryStats);
+    }
+  }, [totalProjects, totalEquipment, activeFilters, projects.length]);
+
   // Handle project selection and navigation
   const handleSelectProject = (projectId: string, initialTab: string = "equipment") => {
     setSelectedProject(projectId);
@@ -619,6 +932,20 @@ const Index = () => {
       setProjects(transformedProjects);
       setFilteredProjects(transformedProjects);
       
+      // Invalidate and update project cards cache (lightweight version)
+      // Only cache active projects (not completed), limit to 24 projects max
+      const cacheKey = `${CACHE_KEYS.PROJECT_CARDS}_${firmId}_${userRole || 'none'}_${userId || 'none'}`;
+      const activeProjects = transformedProjects
+        .filter((p: any) => p.status !== 'completed')
+        .slice(0, 24); // Limit to 24 projects max
+      const lightweightProjects = activeProjects.map((p: any) => ({
+        ...p,
+        equipment: [] // Remove equipment array to save space
+      }));
+      setCache(cacheKey, lightweightProjects, { 
+        ttl: 10 * 60 * 1000, // 10 minutes TTL
+        maxSize: 1 * 1024 * 1024 // 1MB max
+      });
       
     } catch (error) {
       console.error('❌ Error refreshing projects:', error);
@@ -765,9 +1092,22 @@ const Index = () => {
         // Log project deletion
         await logProjectDeleted(projectId, projectName);
         
-        // Update local state
-        setProjects(prev => prev.filter(p => p.id !== projectId));
-        setFilteredProjects(prev => prev.filter(p => p.id !== projectId));
+          // Update local state
+          setProjects(prev => prev.filter(p => p.id !== projectId));
+          setFilteredProjects(prev => prev.filter(p => p.id !== projectId));
+          
+          // Invalidate project cards cache
+          const userData = JSON.parse(localStorage.getItem('userData') || '{}');
+          const firmId = userData.firm_id;
+          const userRole = localStorage.getItem('userRole');
+          const userId = localStorage.getItem('userId');
+          if (firmId) {
+            const cacheKey = `${CACHE_KEYS.PROJECT_CARDS}_${firmId}_${userRole || 'none'}_${userId || 'none'}`;
+            removeCache(cacheKey);
+          }
+          
+          // Also invalidate equipment cache for this project
+          removeCache(`${CACHE_KEYS.EQUIPMENT}_${projectId}`);
         
         // Navigate back to project list if currently viewing the deleted project
         if (selectedProject === projectId) {
@@ -1436,7 +1776,7 @@ Note: Please download the Recommendation Letter template using the link above, f
       await fastAPI.updateProject(updatedProjectData.id, projectDataForSupabase);
       
       // Update local state
-    setProjects(prev => prev.map(p => 
+    const updatedProjects = projects.map(p => 
         p.id === updatedProjectData.id ? {
           ...p,
           name: updatedProjectData.projectTitle,
@@ -1448,8 +1788,9 @@ Note: Please download the Recommendation Letter template using the link above, f
           clientFocalPoint: updatedProjectData.clientFocalPoint 
 
         } : p
-    ));
-    setFilteredProjects(prev => prev.map(p => 
+    );
+    setProjects(updatedProjects);
+    setFilteredProjects(updatedProjects.map(p => 
         p.id === updatedProjectData.id ? {
           ...p,
           name: updatedProjectData.projectTitle,
@@ -1458,9 +1799,30 @@ Note: Please download the Recommendation Letter template using the link above, f
           manager: updatedProjectData.projectManager,
           deadline: updatedProjectData.completionDate,
           poNumber: updatedProjectData.poNumber,
-          clientFocalPoint: updatedProjectData.clientFocalPoint
+          clientFocalPoint: updatedProjectData.clientFocalPoint 
         } : p
-      ));
+    ));
+    
+    // Update project cards cache (lightweight version)
+    // Only cache active projects (not completed), limit to 24 projects max
+    const userData = JSON.parse(localStorage.getItem('userData') || '{}');
+    const firmId = userData.firm_id;
+    const userRole = localStorage.getItem('userRole');
+    const userId = localStorage.getItem('userId');
+    if (firmId) {
+      const cacheKey = `${CACHE_KEYS.PROJECT_CARDS}_${firmId}_${userRole || 'none'}_${userId || 'none'}`;
+      const activeProjects = updatedProjects
+        .filter((p: any) => p.status !== 'completed')
+        .slice(0, 24); // Limit to 24 projects max
+      const lightweightProjects = activeProjects.map((p: any) => ({
+        ...p,
+        equipment: [] // Remove equipment array to save space
+      }));
+      setCache(cacheKey, lightweightProjects, { 
+        ttl: 10 * 60 * 1000, // 10 minutes TTL
+        maxSize: 1 * 1024 * 1024 // 1MB max
+      });
+    }
       
     setShowAddProjectForm(false);
     setEditMode(false);
@@ -1521,7 +1883,7 @@ Note: Please download the Recommendation Letter template using the link above, f
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
                   </svg>
-                  Projects ({totalProjects})
+                  Projects ({cachedTabCounters?.projects ?? cachedSummaryStats?.totalProjects ?? totalProjects})
                 </div>
               </button>
               <button
@@ -1537,7 +1899,7 @@ Note: Please download the Recommendation Letter template using the link above, f
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                   </svg>
-                  Standalone Equipment ({standaloneEquipment.length})
+                  Standalone Equipment ({cachedTabCounters?.standaloneEquipment ?? standaloneEquipment.length})
                 </div>
               </button>
              
@@ -1553,7 +1915,7 @@ Note: Please download the Recommendation Letter template using the link above, f
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                   </svg>
-                  Completion Certificates ({completedProjects.length})
+                  Completion Certificates ({cachedTabCounters?.completionCertificates ?? completedProjects.length})
                 </div>
               </button>
               <button
@@ -1578,7 +1940,10 @@ Note: Please download the Recommendation Letter template using the link above, f
         {/* Tab Content */}
         {mainTab === 'projects' && !selectedProject ? (
           <>
-            <ProjectSummaryCards totalProjects={totalProjects} totalEquipment={totalEquipment} />
+            <ProjectSummaryCards 
+              totalProjects={cachedSummaryStats?.totalProjects ?? totalProjects} 
+              totalEquipment={cachedSummaryStats?.totalEquipment ?? totalEquipment} 
+            />
 
             {/* Company Highlights Section */}
             <CompanyHighlights onSelectProject={handleSelectProject} />

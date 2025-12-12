@@ -83,6 +83,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         setUserRole(null);
         setUserName(null);
         setFirmId(null);
+        // Clear cache on logout
+        const { clearCache } = await import('@/utils/cache');
+        clearCache();
         localStorage.clear();
       }
       setLoading(false);
@@ -151,6 +154,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       setUserRole(null);
       setUserName(null);
       setFirmId(null);
+      // Clear cache on logout
+      const { clearCache } = await import('@/utils/cache');
+      clearCache();
       localStorage.clear();
     } catch (error) {
       console.error('Error signing out:', error);
