@@ -53,6 +53,19 @@ const ProjectHeader: React.FC<ProjectHeaderProps> = ({ loading, userName, userRo
       const tabCounters = localStorage.getItem('epms_cache_tab_counters');
       const summaryStats = localStorage.getItem('epms_cache_summary_stats');
       const standaloneEquipment = localStorage.getItem('epms_cache_equipment_standalone');
+      // Preserve firm logo (priority loader - never clear)
+      const firmLogoKeys: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith('epms_cache_firm_logo_')) {
+          firmLogoKeys.push(key);
+        }
+      }
+      const firmLogos: Record<string, string> = {};
+      firmLogoKeys.forEach(key => {
+        const value = localStorage.getItem(key);
+        if (value) firmLogos[key] = value;
+      });
       
       localStorage.clear();
       
@@ -60,6 +73,10 @@ const ProjectHeader: React.FC<ProjectHeaderProps> = ({ loading, userName, userRo
       if (tabCounters) localStorage.setItem('epms_cache_tab_counters', tabCounters);
       if (summaryStats) localStorage.setItem('epms_cache_summary_stats', summaryStats);
       if (standaloneEquipment) localStorage.setItem('epms_cache_equipment_standalone', standaloneEquipment);
+      // Restore firm logos (priority loader - never clear)
+      Object.entries(firmLogos).forEach(([key, value]) => {
+        localStorage.setItem(key, value);
+      });
       
       sessionStorage.clear();
       
@@ -88,12 +105,29 @@ const ProjectHeader: React.FC<ProjectHeaderProps> = ({ loading, userName, userRo
         const tabCounters = localStorage.getItem('epms_cache_tab_counters');
         const summaryStats = localStorage.getItem('epms_cache_summary_stats');
         const standaloneEquipment = localStorage.getItem('epms_cache_equipment_standalone');
+        // Preserve firm logos (priority loader - never clear)
+        const firmLogoKeys: string[] = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (key && key.startsWith('epms_cache_firm_logo_')) {
+            firmLogoKeys.push(key);
+          }
+        }
+        const firmLogos: Record<string, string> = {};
+        firmLogoKeys.forEach(key => {
+          const value = localStorage.getItem(key);
+          if (value) firmLogos[key] = value;
+        });
         
         localStorage.clear();
         
         if (tabCounters) localStorage.setItem('epms_cache_tab_counters', tabCounters);
         if (summaryStats) localStorage.setItem('epms_cache_summary_stats', summaryStats);
         if (standaloneEquipment) localStorage.setItem('epms_cache_equipment_standalone', standaloneEquipment);
+        // Restore firm logos (priority loader - never clear)
+        Object.entries(firmLogos).forEach(([key, value]) => {
+          localStorage.setItem(key, value);
+        });
       } catch {}
       sessionStorage.clear();
       window.location.replace('/login');

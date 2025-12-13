@@ -2306,59 +2306,63 @@ const StandaloneEquipmentCard: React.FC<StandaloneEquipmentCardProps> = (props) 
                                         
                                         {/* Right Side: Image + Action Buttons */}
                                         <div className="flex items-center gap-1.5 sm:gap-2">
-                                          {/* Image Preview - Next to action buttons */}
-                                          {(entry.image || (entry as any).image_url) && (
-                                            <div 
-                                              className="relative group cursor-pointer"
-                                              onClick={() => {
-                                                // Get user name with priority: entry users > uploadedBy > user object > localStorage > email (last resort)
-                                                let userName = (entry as any).users?.full_name || (entry as any).uploadedBy;
-                                                
-                                                if (!userName) {
-                                                  // Try user object
-                                                  userName = (user as any)?.full_name;
+                                          {/* Image Preview - Next to action buttons - Always render container to prevent layout shifts */}
+                                          <div 
+                                            className={`relative group w-10 h-10 sm:w-12 sm:h-12 flex-shrink-0 ${(entry.image || (entry as any).image_url) ? 'cursor-pointer' : 'pointer-events-none'}`}
+                                            onClick={(entry.image || (entry as any).image_url) ? () => {
+                                              // Get user name with priority: entry users > uploadedBy > user object > localStorage > email (last resort)
+                                              let userName = (entry as any).users?.full_name || (entry as any).uploadedBy;
+                                              
+                                              if (!userName) {
+                                                // Try user object
+                                                userName = (user as any)?.full_name;
+                                              }
+                                              
+                                              if (!userName) {
+                                                // Try localStorage userData
+                                                try {
+                                                  const userData = JSON.parse(localStorage.getItem('userData') || '{}');
+                                                  userName = userData?.full_name || userData?.name;
+                                                } catch (e) {
+                                                  // Ignore parse errors
                                                 }
-                                                
-                                                if (!userName) {
-                                                  // Try localStorage userData
-                                                  try {
-                                                    const userData = JSON.parse(localStorage.getItem('userData') || '{}');
-                                                    userName = userData?.full_name || userData?.name;
-                                                  } catch (e) {
-                                                    // Ignore parse errors
-                                                  }
-                                                }
-                                                
-                                                if (!userName) {
-                                                  // Try old userName in localStorage
-                                                  userName = localStorage.getItem('userName');
-                                                }
-                                                
-                                                // Email as last resort only
-                                                if (!userName) {
-                                                  userName = user?.email || 'Unknown User';
-                                                }
-                                                
-                                                setShowProgressImageModal({
-                                                  url: entry.image || (entry as any).image_url,
-                                                  description: entry.imageDescription || (entry as any).image_description,
-                                                  uploadedBy: userName,
-                                                  uploadDate: entry.uploadDate || (entry as any).created_at
-                                                });
-                                              }}
-                                              title="Click to view larger image"
-                                            >
-                                              <img
-                                                src={entry.image || (entry as any).image_url}
-                                                alt={`Progress ${index + 1}`}
-                                                className="w-10 h-10 sm:w-12 sm:h-12 object-cover rounded-lg border border-gray-200 shadow-sm transition-all hover:shadow-md hover:border-blue-300"
-                                              />
-                                              {/* Eye Icon Overlay - Visual indicator only */}
-                                              <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-0 group-hover:bg-opacity-30 rounded-lg transition-all opacity-0 group-hover:opacity-100 pointer-events-none">
-                                                <Eye className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-white" />
-                                              </div>
-                                            </div>
-                                          )}
+                                              }
+                                              
+                                              if (!userName) {
+                                                // Try old userName in localStorage
+                                                userName = localStorage.getItem('userName');
+                                              }
+                                              
+                                              // Email as last resort only
+                                              if (!userName) {
+                                                userName = user?.email || 'Unknown User';
+                                              }
+                                              
+                                              setShowProgressImageModal({
+                                                url: entry.image || (entry as any).image_url,
+                                                description: entry.imageDescription || (entry as any).image_description,
+                                                uploadedBy: userName,
+                                                uploadDate: entry.uploadDate || (entry as any).created_at
+                                              });
+                                            } : undefined}
+                                            title={(entry.image || (entry as any).image_url) ? "Click to view larger image" : undefined}
+                                          >
+                                            {(entry.image || (entry as any).image_url) ? (
+                                              <>
+                                                <img
+                                                  src={entry.image || (entry as any).image_url}
+                                                  alt={`Progress ${index + 1}`}
+                                                  className="w-10 h-10 sm:w-12 sm:h-12 object-cover rounded-lg border border-gray-200 shadow-sm transition-all hover:shadow-md hover:border-blue-300"
+                                                />
+                                                {/* Eye Icon Overlay - Visual indicator only */}
+                                                <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-0 group-hover:bg-opacity-30 rounded-lg transition-all opacity-0 group-hover:opacity-100 pointer-events-none">
+                                                  <Eye className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-white" />
+                                                </div>
+                                              </>
+                                            ) : (
+                                              <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg border border-transparent" />
+                                            )}
+                                          </div>
                                           
                                           {/* Action Buttons */}
                                           <div className="flex items-center gap-0.5 sm:gap-1">

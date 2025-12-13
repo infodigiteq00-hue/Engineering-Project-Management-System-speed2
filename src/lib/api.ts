@@ -451,6 +451,26 @@ export const fastAPI = {
         }
       }
       
+      // Delete equipment progress entries
+      // console.log('🗑️ Deleting equipment progress entries...');
+      for (const eq of (equipment as any[])) {
+        try {
+          await api.delete(`/equipment_progress_entries?equipment_id=eq.${eq.id}`);
+        } catch (error) {
+          console.log('⚠️ No progress entries to delete for equipment:', eq.id);
+        }
+      }
+      
+      // Delete equipment team positions
+      // console.log('🗑️ Deleting equipment team positions...');
+      for (const eq of (equipment as any[])) {
+        try {
+          await api.delete(`/equipment_team_positions?equipment_id=eq.${eq.id}`);
+        } catch (error) {
+          console.log('⚠️ No team positions to delete for equipment:', eq.id);
+        }
+      }
+      
       // Now delete equipment
       // console.log('🗑️ Deleting related equipment...');
       try {
@@ -1231,6 +1251,35 @@ export const fastAPI = {
       const equipmentResponse = await api.get(`/equipment?id=eq.${id}&select=project_id,type,tag_number`);
       const equipment = equipmentResponse.data?.[0];
       
+      // Delete equipment documents first (they reference equipment)
+      try {
+        await api.delete(`/equipment_documents?equipment_id=eq.${id}`);
+      } catch (error) {
+        console.log('⚠️ No equipment documents to delete for equipment:', id);
+      }
+      
+      // Delete equipment progress images
+      try {
+        await api.delete(`/equipment_progress_images?equipment_id=eq.${id}`);
+      } catch (error) {
+        console.log('⚠️ No progress images to delete for equipment:', id);
+      }
+      
+      // Delete equipment progress entries
+      try {
+        await api.delete(`/equipment_progress_entries?equipment_id=eq.${id}`);
+      } catch (error) {
+        console.log('⚠️ No progress entries to delete for equipment:', id);
+      }
+      
+      // Delete equipment team positions
+      try {
+        await api.delete(`/equipment_team_positions?equipment_id=eq.${id}`);
+      } catch (error) {
+        console.log('⚠️ No team positions to delete for equipment:', id);
+      }
+      
+      // Now delete the equipment
       const response = await api.delete(`/equipment?id=eq.${id}`);
       
       // Log equipment deletion

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Clock, Building, Wrench, AlertTriangle, Image, FileCheck, UserPlus, TrendingUp, FileText, ArrowRight } from "lucide-react";
 
 interface StandaloneEquipmentLogsTabProps {
@@ -35,18 +35,75 @@ const StandaloneEquipmentLogsTab: React.FC<StandaloneEquipmentLogsTabProps> = ({
     }
   }, [equipmentId, projectId]);
 
-  // Load logs when component mounts
-  useEffect(() => {
-    if (equipmentId && projectId === 'standalone') {
-      loadEquipmentActivityLogs();
-    }
-  }, [equipmentId, projectId, loadEquipmentActivityLogs]);
+  const lastEquipmentIdRef = useRef<string | null>(null);
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const hasInitializedRef = useRef(false);
 
-  // Listen for equipment changes to refresh logs
+  // Load logs when component mounts or equipmentId changes (only once per change)
+  useEffect(() => {
+    if (equipmentId && projectId === 'standalone' && lastEquipmentIdRef.current !== equipmentId) {
+      // Clear any existing interval
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+      
+      lastEquipmentIdRef.current = equipmentId;
+      hasInitializedRef.current = false;
+      
+      // Load initial data
+      loadEquipmentActivityLogs();
+      
+      // Set up auto-refresh after initial load completes (wait 3 seconds to ensure initial load is done)
+      const initTimeout = setTimeout(() => {
+        hasInitializedRef.current = true;
+        
+        // Clear any existing interval before creating new one
+        if (intervalRef.current) {
+          clearInterval(intervalRef.current);
+        }
+        
+        // Set up 60-second auto-refresh
+        intervalRef.current = setInterval(() => {
+          loadEquipmentActivityLogs();
+        }, 60000); // 60 seconds
+      }, 3000);
+      
+      return () => {
+        clearTimeout(initTimeout);
+        if (intervalRef.current) {
+          clearInterval(intervalRef.current);
+          intervalRef.current = null;
+        }
+      };
+    } else if (!equipmentId || projectId !== 'standalone') {
+      // Clear interval when equipmentId is cleared
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+      lastEquipmentIdRef.current = null;
+      hasInitializedRef.current = false;
+    }
+    // Intentionally exclude loadEquipmentActivityLogs to prevent infinite loop
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [equipmentId, projectId]);
+
+  // Cleanup interval on unmount
+  useEffect(() => {
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+    };
+  }, []);
+
+  // Listen for equipment changes to refresh logs (event-based, not prop-based)
   useEffect(() => {
     if (projectId === 'standalone') {
       const handleEquipmentChanged = (event: any) => {
-        // Refresh logs when equipment is updated
+        // Refresh logs when equipment is updated (but don't reset the interval)
         if (equipmentId && projectId === 'standalone') {
           loadEquipmentActivityLogs();
         }
@@ -58,25 +115,18 @@ const StandaloneEquipmentLogsTab: React.FC<StandaloneEquipmentLogsTabProps> = ({
         window.removeEventListener('equipmentChanged', handleEquipmentChanged);
       };
     }
-  }, [projectId, equipmentId, loadEquipmentActivityLogs]);
+    // Intentionally exclude loadEquipmentActivityLogs to prevent infinite loop
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, equipmentId]);
 
-  // Auto-refresh equipment logs periodically
+  // Handle activity updates via ref to avoid dependency issues
+  const onActivityUpdateRef = useRef(onActivityUpdate);
   useEffect(() => {
-    if (equipmentId && projectId === 'standalone') {
-      const interval = setInterval(() => {
-        loadEquipmentActivityLogs();
-      }, 60000); // 60 seconds
+    onActivityUpdateRef.current = onActivityUpdate;
+  }, [onActivityUpdate]);
 
-      return () => clearInterval(interval);
-    }
-  }, [equipmentId, projectId, loadEquipmentActivityLogs]);
-
-  // Listen for activity updates
-  useEffect(() => {
-    if (onActivityUpdate) {
-      loadEquipmentActivityLogs();
-    }
-  }, [onActivityUpdate, loadEquipmentActivityLogs]);
+  // Don't create a useEffect for onActivityUpdate - it causes infinite loops
+  // Instead, parent should call loadEquipmentActivityLogs directly or use events
 
   // Helper function to format date
   const formatDate = (dateString: string) => {

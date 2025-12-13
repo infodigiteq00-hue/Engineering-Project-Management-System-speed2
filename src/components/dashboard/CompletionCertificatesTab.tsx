@@ -335,7 +335,7 @@ const CompletionCertificatesTab = ({
         
         {filteredCompletedProjects.length > 0 ? (
           <>
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               {paginatedCompletedProjects.map((project) => {
               // Check if deadline is valid
               const hasValidDeadline = project.deadline && !isNaN(new Date(project.deadline).getTime());
@@ -951,8 +951,8 @@ const CompletionCertificatesTab = ({
                   </div>
                 </div>
               );
-              })}
-            </div>
+            })}
+          </div>
             
             {/* Pagination Controls */}
             {totalPages > 1 && (

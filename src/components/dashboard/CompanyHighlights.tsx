@@ -4,7 +4,7 @@ import { activityApi } from '@/lib/activityApi';
 import axios from 'axios';
 import { Clock, User, FileText, CheckCircle, Send, Play, Pause, X, Eye, Search } from 'lucide-react';
 import { Input } from '@/components/ui/input';
-// Company highlights caching removed - will be re-implemented with metadata-only caching later
+import { getCache, setCache, prefetchWithCache, CACHE_KEYS } from '@/utils/cache';
 
 interface CompanyHighlightsProps {
   onSelectProject?: (projectId: string, initialTab?: string) => void;
@@ -39,20 +39,24 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
   const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [showProgressImageModal, setShowProgressImageModal] = useState<{ url: string, description?: string, uploadedBy?: string, uploadDate?: string } | null>(null);
+  const [loadingImages, setLoadingImages] = useState<Set<string>>(new Set()); // Track which images are loading
+  const [loadedImages, setLoadedImages] = useState<Set<string>>(new Set()); // Track which images have loaded
   
   // User role and project filtering
   const [userRole, setUserRole] = useState<string>('');
   const [assignedProjectIds, setAssignedProjectIds] = useState<string[]>([]);
   const [firmId, setFirmId] = useState<string>('');
+  const [userId, setUserId] = useState<string>('');
 
   // Load user role and fetch assigned projects on mount
   useEffect(() => {
     const loadUserData = () => {
       const role = localStorage.getItem('userRole') || '';
-      const userId = localStorage.getItem('userId') || '';
+      const userUserId = localStorage.getItem('userId') || '';
       const userFirmId = localStorage.getItem('firmId') || '';
       
       setUserRole(role);
+      setUserId(userUserId);
       setFirmId(userFirmId);
       
       // If VDCR Manager, set active tab to documentation
@@ -91,36 +95,69 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
     return true;
   };
   
+  // Helper: Create lightweight metadata for milestone equipment (already lightweight, just limit to 30)
+  const createLightweightMilestones = (equipment: any[]) => {
+    return equipment.slice(0, 30).map((eq: any) => ({
+      id: eq.id,
+      tag_number: eq.tag_number,
+      type: eq.type,
+      name: eq.name,
+      next_milestone: eq.next_milestone,
+      progress: eq.progress,
+      project_id: eq.project_id,
+      projects: eq.projects ? {
+        id: eq.projects.id,
+        name: eq.projects.name,
+        status: eq.projects.status
+      } : null
+    }));
+  };
+
   // Fetch milestone updates - Equipment with next milestones
+  // NEW: Added metadata-only caching (30 latest entries)
   useEffect(() => {
     const fetchMilestoneUpdates = async () => {
       setLoading(true);
       try {
-        // Fetch all equipment with next_milestone data
-        const equipment = await fastAPI.getAllEquipmentNearingCompletion(
-          undefined,
-          undefined,
-          userRole === 'firm_admin' ? undefined : assignedProjectIds
+        // Cache key for Milestone (metadata only, 30 latest)
+        const cacheKey = `${CACHE_KEYS.COMPANY_HIGHLIGHTS_MILESTONE}_${firmId}_${userRole || 'none'}_${userId || 'none'}`;
+        
+        // Fetch with cache (metadata only, 30 latest entries)
+        const equipment = await prefetchWithCache(
+          cacheKey,
+          async () => {
+            const data = await fastAPI.getAllEquipmentNearingCompletion(
+              undefined,
+              undefined,
+              userRole === 'firm_admin' ? undefined : assignedProjectIds
+            );
+            
+            const eqArray = Array.isArray(data) ? data : [];
+            // Filter equipment that has next_milestone
+            const withMilestones = eqArray.filter((eq: any) => {
+              return eq.next_milestone && eq.next_milestone.trim() !== '';
+            });
+            
+            // Sort by project name and equipment type
+            const sortedMilestones = withMilestones.sort((a: any, b: any) => {
+              const projectA = a.projects?.name || '';
+              const projectB = b.projects?.name || '';
+              if (projectA !== projectB) {
+                return projectA.localeCompare(projectB);
+              }
+              return (a.type || '').localeCompare(b.type || '');
+            });
+            
+            // Create lightweight metadata (limit to 30)
+            return createLightweightMilestones(sortedMilestones);
+          },
+          { 
+            ttl: 10 * 60 * 1000, // 10 minutes TTL
+            maxSize: 1 * 1024 * 1024 // 1MB max
+          }
         );
         
-        // Filter equipment that has next_milestone - show all equipment with next_milestone set
-        const eqArray = Array.isArray(equipment) ? equipment : [];
-        const withMilestones = eqArray.filter((eq: any) => {
-          // Show equipment that has next_milestone set (not empty/null)
-          return eq.next_milestone && eq.next_milestone.trim() !== '';
-        });
-        
-        // Sort by project name and equipment type
-        const sortedMilestones = withMilestones.sort((a: any, b: any) => {
-          const projectA = a.projects?.name || '';
-          const projectB = b.projects?.name || '';
-          if (projectA !== projectB) {
-            return projectA.localeCompare(projectB);
-          }
-          return (a.type || '').localeCompare(b.type || '');
-        });
-        
-        const filteredMilestones = filterByAssignedProjects(sortedMilestones, 'project_id');
+        const filteredMilestones = filterByAssignedProjects(equipment, 'project_id');
         setMilestoneUpdates(filteredMilestones);
       } catch (error) {
         console.error('❌ Error fetching milestone updates:', error);
@@ -133,7 +170,7 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
     if (isExpanded && activeTab === 'milestone' && canSeeTab('milestone')) {
       fetchMilestoneUpdates();
     }
-  }, [activeTab, isExpanded, userRole, assignedProjectIds]);
+  }, [activeTab, isExpanded, userRole, assignedProjectIds, firmId, userId]);
   
   // Filter data by assigned projects
   const filterByAssignedProjects = (data: any[], projectIdKey: string = 'project_id') => {
@@ -166,12 +203,18 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
     });
   };
 
-  // Calculate date range based on time period
+  // Calculate date range - DEFAULT TO 7 DAYS for caching (ignore time period selector for cache)
   // FIX: Return primitive values (strings) instead of object to prevent infinite re-renders
   const dateRangeStart = useMemo(() => {
     const now = new Date();
     const startDate = new Date();
-
+    
+    // For caching: Always use 7 days (default)
+    // For UI display: Use selected time period
+    const cacheDateStart = new Date();
+    cacheDateStart.setDate(now.getDate() - 7); // Always 7 days for cache
+    
+    // UI date range (for display/filtering)
     if (timePeriod === 'Custom') {
       if (customDateRange.from && customDateRange.to) {
         return new Date(customDateRange.from).toISOString();
@@ -196,13 +239,76 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
 
     return startDate.toISOString();
   }, [timePeriod, customDateRange.from, customDateRange.to]);
+  
+  // Cache date range (always 7 days)
+  const cacheDateRangeStart = useMemo(() => {
+    const now = new Date();
+    const startDate = new Date();
+    startDate.setDate(now.getDate() - 7); // Always 7 days for cache
+    return startDate.toISOString();
+  }, []);
 
   const dateRangeEnd = useMemo(() => {
     return new Date().toISOString();
   }, []); // Only recalculate when component mounts, not on every render
 
+  // Helper: Create lightweight metadata for progress images (include image URLs - they're just strings, very lightweight)
+  const createLightweightProgressImages = (images: any[]) => {
+    return images.slice(0, 30).map((img: any) => ({
+      id: img.id,
+      description: img.description,
+      uploaded_by: img.uploaded_by,
+      upload_date: img.upload_date,
+      entry_type: img.entry_type || 'progress_image',
+      created_at: img.created_at,
+      image_url: img.image_url || img.image, // Include image URL (just a string, ~300 bytes)
+      image_description: img.image_description || img.imageDescription,
+      equipment: img.equipment ? {
+        id: img.equipment.id,
+        tag_number: img.equipment.tag_number,
+        type: img.equipment.type,
+        name: img.equipment.name,
+        project_id: img.equipment.project_id,
+        projects: img.equipment.projects ? {
+          id: img.equipment.projects.id,
+          name: img.equipment.projects.name
+        } : null
+      } : null,
+      // Image URLs are lightweight (just strings), so we cache them for faster loading
+    }));
+  };
+
+  // Helper: Create lightweight metadata for progress entries (include image URLs and audio URLs - they're just strings, very lightweight)
+  const createLightweightProgressEntries = (entries: any[]) => {
+    return entries.slice(0, 30).map((entry: any) => ({
+      id: entry.id,
+      entry_text: entry.entry_text || entry.text,
+      entry_type: entry.entry_type || entry.type,
+      created_at: entry.created_at || entry.date,
+      created_by: entry.created_by,
+      image_url: entry.image_url || entry.image, // Include image URL if exists (just a string, ~300 bytes)
+      image_description: entry.image_description || entry.imageDescription,
+      audio_url: entry.audio_url || entry.audio, // Include audio URL if exists (just a string, ~300 bytes)
+      audio_duration: entry.audio_duration || entry.audioDuration, // Duration is just a number
+      equipment: entry.equipment ? {
+        id: entry.equipment.id,
+        tag_number: entry.equipment.tag_number,
+        type: entry.equipment.type,
+        name: entry.equipment.name,
+        project_id: entry.equipment.project_id,
+        projects: entry.equipment.projects ? {
+          id: entry.equipment.projects.id,
+          name: entry.equipment.projects.name
+        } : null
+      } : null,
+      // Image/audio URLs are lightweight (just strings), so we cache them for faster loading
+      // Don't include actual audio_data (base64) - that's heavy, load on-demand
+    }));
+  };
+
   // Fetch production updates (progress images for Key Progress, progress entries for All Updates)
   // FIX: Added request cancellation and fixed state clearing
+  // NEW: Added metadata-only caching (30 latest entries, 7 days default)
   useEffect(() => {
     // Create abort controller for request cancellation
     const abortController = new AbortController();
@@ -214,35 +320,132 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
     }
     
     const fetchProductionUpdates = async () => {
-      
       try {
         if (productionSubTab === 'key-progress') {
-          // Fetch progress images for Key Progress tab (no caching for now - will cache metadata only later)
-          const images = await fastAPI.getAllProgressImages(
-            dateRangeStart, 
-            dateRangeEnd,
-            userRole === 'firm_admin' ? undefined : assignedProjectIds
+          // Cache key for Key Progress (metadata only, 30 latest, 7 days)
+          const cacheKey = `${CACHE_KEYS.COMPANY_HIGHLIGHTS_PRODUCTION_KEY_PROGRESS}_${firmId}_${userRole || 'none'}_${userId || 'none'}`;
+          
+          // Step 1: Fetch cached metadata (instant display)
+          const cachedMetadata = await prefetchWithCache(
+            cacheKey,
+            async () => {
+              const data = await fastAPI.getAllProgressImages(
+                cacheDateRangeStart, // Always use 7 days for cache
+                dateRangeEnd,
+                userRole === 'firm_admin' ? undefined : assignedProjectIds
+              );
+              // Create lightweight metadata (limit to 30, no image URLs)
+              return createLightweightProgressImages(Array.isArray(data) ? data : []);
+            },
+            { 
+              ttl: 10 * 60 * 1000, // 10 minutes TTL
+              maxSize: 1 * 1024 * 1024 // 1MB max
+            }
           );
           
-          // Only update state if component is still mounted and request wasn't aborted
+          // Step 2: Show metadata immediately (even without images)
           if (isMounted && !abortController.signal.aborted) {
-            const filteredImages = filterByAssignedProjects(images, 'equipment.project_id');
-            setProductionUpdates(Array.isArray(filteredImages) ? filteredImages : []);
-            setLoading(false); // Only set loading to false after data is set
+            const filteredImages = filterByAssignedProjects(cachedMetadata, 'equipment.project_id');
+            if (Array.isArray(filteredImages) && filteredImages.length > 0) {
+              setProductionUpdates(filteredImages);
+            } else if (Array.isArray(cachedMetadata) && cachedMetadata.length > 0) {
+              setProductionUpdates(cachedMetadata);
+            }
+            setLoading(false);
+          }
+          
+          // Step 3: Fetch full data with image URLs in background (non-blocking)
+          if (!abortController.signal.aborted) {
+            fastAPI.getAllProgressImages(
+              dateRangeStart, // Use actual date range for full fetch
+              dateRangeEnd,
+              userRole === 'firm_admin' ? undefined : assignedProjectIds
+            )
+              .then((fullData) => {
+                if (isMounted && !abortController.signal.aborted) {
+                  const fullImages = Array.isArray(fullData) ? fullData : [];
+                  // Limit to 30 and filter
+                  const limitedFullImages = fullImages.slice(0, 30);
+                  const filteredFullImages = filterByAssignedProjects(limitedFullImages, 'equipment.project_id');
+                  // Update with full data (including image URLs)
+                  if (Array.isArray(filteredFullImages) && filteredFullImages.length > 0) {
+                    setProductionUpdates(filteredFullImages);
+                  }
+                  // Update cache with lightweight version
+                  const lightweight = createLightweightProgressImages(limitedFullImages);
+                  setCache(cacheKey, lightweight, { 
+                    ttl: 10 * 60 * 1000,
+                    maxSize: 1 * 1024 * 1024
+                  });
+                }
+              })
+              .catch((error) => {
+                // If full fetch fails, keep showing cached metadata
+                console.warn('Background image fetch failed, keeping cached metadata:', error);
+              });
           }
         } else {
-          // Fetch progress entries for All Updates tab (no caching for now - will cache metadata only later)
-          const entries = await fastAPI.getAllProgressEntries(
-            dateRangeStart, 
-            dateRangeEnd,
-            userRole === 'firm_admin' ? undefined : assignedProjectIds
+          // Cache key for All Updates (metadata only, 30 latest, 7 days)
+          const cacheKey = `${CACHE_KEYS.COMPANY_HIGHLIGHTS_PRODUCTION_ALL_UPDATES}_${firmId}_${userRole || 'none'}_${userId || 'none'}`;
+          
+          // Step 1: Fetch cached metadata (instant display)
+          const cachedMetadata = await prefetchWithCache(
+            cacheKey,
+            async () => {
+              const data = await fastAPI.getAllProgressEntries(
+                cacheDateRangeStart, // Always use 7 days for cache
+                dateRangeEnd,
+                userRole === 'firm_admin' ? undefined : assignedProjectIds
+              );
+              // Create lightweight metadata (limit to 30, no audio data)
+              return createLightweightProgressEntries(Array.isArray(data) ? data : []);
+            },
+            { 
+              ttl: 10 * 60 * 1000, // 10 minutes TTL
+              maxSize: 1 * 1024 * 1024 // 1MB max
+            }
           );
           
-          // Only update state if component is still mounted and request wasn't aborted
+          // Step 2: Show metadata immediately (even without audio)
           if (isMounted && !abortController.signal.aborted) {
-            const filteredEntries = filterByAssignedProjects(entries, 'equipment.project_id');
-            setProductionUpdates(Array.isArray(filteredEntries) ? filteredEntries : []);
-            setLoading(false); // Only set loading to false after data is set
+            const filteredEntries = filterByAssignedProjects(cachedMetadata, 'equipment.project_id');
+            if (Array.isArray(filteredEntries) && filteredEntries.length > 0) {
+              setProductionUpdates(filteredEntries);
+            } else if (Array.isArray(cachedMetadata) && cachedMetadata.length > 0) {
+              setProductionUpdates(cachedMetadata);
+            }
+            setLoading(false);
+          }
+          
+          // Step 3: Fetch full data with audio in background (non-blocking)
+          if (!abortController.signal.aborted) {
+            fastAPI.getAllProgressEntries(
+              dateRangeStart, // Use actual date range for full fetch
+              dateRangeEnd,
+              userRole === 'firm_admin' ? undefined : assignedProjectIds
+            )
+              .then((fullData) => {
+                if (isMounted && !abortController.signal.aborted) {
+                  const fullEntries = Array.isArray(fullData) ? fullData : [];
+                  // Limit to 30 and filter
+                  const limitedFullEntries = fullEntries.slice(0, 30);
+                  const filteredFullEntries = filterByAssignedProjects(limitedFullEntries, 'equipment.project_id');
+                  // Update with full data (including audio)
+                  if (Array.isArray(filteredFullEntries) && filteredFullEntries.length > 0) {
+                    setProductionUpdates(filteredFullEntries);
+                  }
+                  // Update cache with lightweight version
+                  const lightweight = createLightweightProgressEntries(limitedFullEntries);
+                  setCache(cacheKey, lightweight, { 
+                    ttl: 10 * 60 * 1000,
+                    maxSize: 1 * 1024 * 1024
+                  });
+                }
+              })
+              .catch((error) => {
+                // If full fetch fails, keep showing cached metadata
+                console.warn('Background audio fetch failed, keeping cached metadata:', error);
+              });
           }
         }
       } catch (error: any) {
@@ -271,7 +474,7 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
       isMounted = false;
       abortController.abort();
     };
-  }, [dateRangeStart, dateRangeEnd, isExpanded, activeTab, productionSubTab, userRole, assignedProjectIds]);
+  }, [cacheDateRangeStart, dateRangeEnd, isExpanded, activeTab, productionSubTab, userRole, assignedProjectIds, firmId]);
 
   // Fetch equipment card updates (equipment_updated activity logs)
   // NOTE: This runs separately for "All Updates" tab but doesn't affect the main loading state
@@ -538,25 +741,63 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
     return filtered;
   }, [milestoneUpdates, milestoneSearchQuery]);
 
+  // Helper: Create lightweight metadata for documentation (no document files)
+  const createLightweightDocuments = (docs: any[]) => {
+    return docs.slice(0, 30).map((doc: any) => ({
+      id: doc.id,
+      document_name: doc.document_name || doc.vdcr_records?.document_name,
+      status: doc.status || doc.vdcr_records?.status,
+      updated_at: doc.updated_at || doc.vdcr_records?.updated_at,
+      created_at: doc.created_at || doc.vdcr_records?.created_at,
+      vdcr_records: doc.vdcr_records ? {
+        id: doc.vdcr_records.id,
+        document_name: doc.vdcr_records.document_name,
+        status: doc.vdcr_records.status,
+        updated_at: doc.vdcr_records.updated_at,
+        project_id: doc.vdcr_records.project_id,
+        equipment_tag_numbers: doc.vdcr_records.equipment_tag_numbers,
+        projects: doc.vdcr_records.projects ? {
+          id: doc.vdcr_records.projects.id,
+          name: doc.vdcr_records.projects.name
+        } : null
+      } : null,
+      // Don't include document files - load on-demand
+    }));
+  };
+
   // Fetch documentation updates - only those with status changes
+  // NEW: Added metadata-only caching (30 latest entries, 7 days default)
   useEffect(() => {
     const fetchDocumentationUpdates = async () => {
       setLoading(true);
       try {
-        // Fetch VDCR records with status changes filtered by updated_at in the selected time range
-        const documents = await fastAPI.getAllVDCRDocuments(
-          dateRangeStart, 
-          dateRangeEnd,
-          userRole === 'firm_admin' ? undefined : assignedProjectIds
+        // Cache key for Documentation (metadata only, 30 latest, 7 days)
+        const cacheKey = `${CACHE_KEYS.COMPANY_HIGHLIGHTS_DOCUMENTATION}_${firmId}_${userRole || 'none'}_${userId || 'none'}`;
+        
+        // Fetch with cache (metadata only, 30 latest entries)
+        const documents = await prefetchWithCache(
+          cacheKey,
+          async () => {
+            const data = await fastAPI.getAllVDCRDocuments(
+              cacheDateRangeStart, // Always use 7 days for cache
+              dateRangeEnd,
+              userRole === 'firm_admin' ? undefined : assignedProjectIds
+            );
+            const docsArray = Array.isArray(data) ? data : [];
+            // Filter to only show records with valid status (not null/undefined)
+            const statusChangedDocs = docsArray.filter((doc: any) => {
+              return doc.vdcr_records?.updated_at && doc.vdcr_records?.status;
+            });
+            // Create lightweight metadata (limit to 30, no document files)
+            return createLightweightDocuments(statusChangedDocs);
+          },
+          { 
+            ttl: 10 * 60 * 1000, // 10 minutes TTL
+            maxSize: 1 * 1024 * 1024 // 1MB max
+          }
         );
-        // The API now filters by updated_at, so we just need to ensure we have valid records
-        const docsArray = Array.isArray(documents) ? documents : [];
-        // Filter to only show records with valid status (not null/undefined)
-        const statusChangedDocs = docsArray.filter((doc: any) => {
-          // Only show records that have been updated (status changes)
-          return doc.vdcr_records?.updated_at && doc.vdcr_records?.status;
-        });
-        const filteredDocs = filterByAssignedProjects(statusChangedDocs, 'vdcr_records.project_id');
+        
+        const filteredDocs = filterByAssignedProjects(documents, 'vdcr_records.project_id');
         setDocumentationUpdates(filteredDocs);
       } catch (error) {
         console.error('Error fetching documentation updates:', error);
@@ -569,77 +810,102 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
     if (isExpanded && activeTab === 'documentation' && canSeeTab('documentation')) {
       fetchDocumentationUpdates();
     }
-  }, [dateRangeStart, dateRangeEnd, activeTab, isExpanded, userRole, assignedProjectIds]);
+  }, [cacheDateRangeStart, dateRangeEnd, activeTab, isExpanded, userRole, assignedProjectIds, firmId, userId]);
+
+  // Helper: Create lightweight metadata for timeline equipment (already lightweight, just limit to 30)
+  const createLightweightTimeline = (equipment: any[]) => {
+    return equipment.slice(0, 30).map((eq: any) => ({
+      id: eq.id,
+      tag_number: eq.tag_number,
+      type: eq.type,
+      name: eq.name,
+      po_cdd: eq.po_cdd,
+      daysToGo: eq.daysToGo,
+      progress: eq.progress,
+      project_id: eq.project_id,
+      projects: eq.projects ? {
+        id: eq.projects.id,
+        name: eq.projects.name,
+        status: eq.projects.status
+      } : null
+    }));
+  };
 
   // Fetch timeline updates - ALL equipment ordered by days remaining (not filtered by time period)
   // Uses po_cdd (PO-CDD) field instead of completion_date
+  // NEW: Added metadata-only caching (30 latest entries)
   useEffect(() => {
     const fetchTimelineUpdates = async () => {
       setLoading(true);
       try {
-        // Fetch all equipment without date filtering
-        const equipment = await fastAPI.getAllEquipmentNearingCompletion(
-          undefined,
-          undefined,
-          userRole === 'firm_admin' ? undefined : assignedProjectIds
+        // Cache key for Timeline (metadata only, 30 latest)
+        const cacheKey = `${CACHE_KEYS.COMPANY_HIGHLIGHTS_TIMELINE}_${firmId}_${userRole || 'none'}_${userId || 'none'}`;
+        
+        // Fetch with cache (metadata only, 30 latest entries)
+        const equipment = await prefetchWithCache(
+          cacheKey,
+          async () => {
+            const data = await fastAPI.getAllEquipmentNearingCompletion(
+              undefined,
+              undefined,
+              userRole === 'firm_admin' ? undefined : assignedProjectIds
+            );
+            
+            const eqArray = Array.isArray(data) ? data : [];
+            
+            // Filter out equipment from completed projects
+            const activeProjectEquipment = eqArray.filter((eq: any) => {
+              if (!eq.projects) return false;
+              const projectStatus = eq.projects.status;
+              return projectStatus && projectStatus !== 'completed' && projectStatus.toLowerCase() !== 'completed';
+            });
+            
+            // Equipment WITH PO-CDD dates
+            const withPOCddDates = activeProjectEquipment.filter((eq: any) => {
+              if (eq.projects && (eq.projects.status === 'completed' || eq.projects.status?.toLowerCase() === 'completed')) {
+                return false;
+              }
+              return eq.po_cdd && eq.po_cdd !== 'To be scheduled' && eq.po_cdd.trim() !== '';
+            });
+            const withDaysToGo = withPOCddDates.map((eq: any) => {
+              const poCddDate = new Date(eq.po_cdd);
+              const today = new Date();
+              today.setHours(0, 0, 0, 0);
+              poCddDate.setHours(0, 0, 0, 0);
+              const diffTime = poCddDate.getTime() - today.getTime();
+              const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+              return { ...eq, daysToGo: diffDays };
+            }).sort((a: any, b: any) => a.daysToGo - b.daysToGo);
+            
+            // Equipment WITHOUT PO-CDD dates
+            const withoutPOCddDates = activeProjectEquipment.filter((eq: any) => {
+              if (eq.projects && (eq.projects.status === 'completed' || eq.projects.status?.toLowerCase() === 'completed')) {
+                return false;
+              }
+              return !eq.po_cdd || eq.po_cdd === 'To be scheduled' || eq.po_cdd.trim() === '';
+            }).sort((a: any, b: any) => {
+              const aName = (a.type || a.name || '').toLowerCase();
+              const bName = (b.type || b.name || '').toLowerCase();
+              return aName.localeCompare(bName);
+            });
+            
+            // Create lightweight metadata (limit to 30 each)
+            return {
+              withDates: createLightweightTimeline(withDaysToGo),
+              withoutDates: createLightweightTimeline(withoutPOCddDates)
+            };
+          },
+          { 
+            ttl: 10 * 60 * 1000, // 10 minutes TTL
+            maxSize: 1 * 1024 * 1024 // 1MB max
+          }
         );
         
-        // Separate equipment into two groups: with PO-CDD dates and without
-        const eqArray = Array.isArray(equipment) ? equipment : [];
-        
-        // Filter out equipment from completed projects first - more robust check
-        const activeProjectEquipment = eqArray.filter((eq: any) => {
-          // Check if project exists and is not completed
-          if (!eq.projects) return false;
-          const projectStatus = eq.projects.status;
-          // Only include if status exists and is NOT 'completed'
-          return projectStatus && projectStatus !== 'completed' && projectStatus.toLowerCase() !== 'completed';
-        });
-        
-        // Equipment WITH PO-CDD dates
-        const withPOCddDates = activeProjectEquipment.filter((eq: any) => {
-          // Double-check project status is not completed
-          if (eq.projects && (eq.projects.status === 'completed' || eq.projects.status?.toLowerCase() === 'completed')) {
-            return false;
-          }
-          // Filter out null, empty, or "To be scheduled" values
-          return eq.po_cdd && eq.po_cdd !== 'To be scheduled' && eq.po_cdd.trim() !== '';
-        });
-        const withDaysToGo = withPOCddDates.map((eq: any) => {
-            const poCddDate = new Date(eq.po_cdd);
-            const today = new Date();
-            today.setHours(0, 0, 0, 0); // Reset time to start of day for accurate day calculation
-            poCddDate.setHours(0, 0, 0, 0);
-            const diffTime = poCddDate.getTime() - today.getTime();
-            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-            return { ...eq, daysToGo: diffDays };
-          })
-          .sort((a: any, b: any) => {
-            // Sort by daysToGo ascending (earliest completion first)
-            // Negative days (overdue) come first, then positive days
-            return a.daysToGo - b.daysToGo;
-          });
-        
-        // Equipment WITHOUT PO-CDD dates
-        const withoutPOCddDates = activeProjectEquipment.filter((eq: any) => {
-          // Double-check project status is not completed
-          if (eq.projects && (eq.projects.status === 'completed' || eq.projects.status?.toLowerCase() === 'completed')) {
-            return false;
-          }
-          // Equipment that doesn't have a valid PO-CDD date
-          return !eq.po_cdd || eq.po_cdd === 'To be scheduled' || eq.po_cdd.trim() === '';
-        }).sort((a: any, b: any) => {
-          // Sort by equipment type or tag number
-          const aName = (a.type || a.name || '').toLowerCase();
-          const bName = (b.type || b.name || '').toLowerCase();
-          return aName.localeCompare(bName);
-        });
-        
-        // Apply project assignment filtering, but ensure completed projects are still excluded
-        const filteredWithDates = filterByAssignedProjects(withDaysToGo, 'project_id').filter((eq: any) => {
+        // Apply project assignment filtering
+        const filteredWithDates = filterByAssignedProjects(equipment.withDates || [], 'project_id').filter((eq: any) => {
           return eq.projects && eq.projects.status !== 'completed' && eq.projects.status?.toLowerCase() !== 'completed';
         });
-        const filteredWithoutDates = filterByAssignedProjects(withoutPOCddDates, 'project_id').filter((eq: any) => {
+        const filteredWithoutDates = filterByAssignedProjects(equipment.withoutDates || [], 'project_id').filter((eq: any) => {
           return eq.projects && eq.projects.status !== 'completed' && eq.projects.status?.toLowerCase() !== 'completed';
         });
         
@@ -656,7 +922,7 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
     if (isExpanded && activeTab === 'timeline' && canSeeTab('timeline')) {
       fetchTimelineUpdates();
     }
-  }, [activeTab, isExpanded, userRole, assignedProjectIds]);
+  }, [activeTab, isExpanded, userRole, assignedProjectIds, firmId, userId]);
 
   // Clear search queries when switching tabs
   useEffect(() => {
@@ -1129,29 +1395,65 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
                             entry.equipment?.project_id ? 'cursor-pointer' : ''
                           }`}
                         >
-                          {/* Thumbnail */}
-                          {(entry.image_url || entry.image) && (
+                          {/* Thumbnail with Loading State */}
+                          {/* Show image/placeholder for: entries with images, progress_image entries, or entries in All Updates that might have images */}
+                          {(entry.image_url || entry.image || entry.entry_type === 'progress_image' || (productionSubTab === 'all-updates' && !entry.audio_data && !entry.audio && !entry.image_url && !entry.image)) && (
                             <div 
                               className="flex-shrink-0 cursor-pointer group relative"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                setShowProgressImageModal({
-                                  url: entry.image_url || entry.image,
-                                  description: entry.image_description || entry.imageDescription,
-                                  uploadedBy: entry.created_by_user?.full_name || entry.uploaded_by || entry.created_by || 'Unknown User',
-                                  uploadDate: entry.created_at || entry.uploadDate || entry.upload_date
-                                });
+                                if (entry.image_url || entry.image) {
+                                  setShowProgressImageModal({
+                                    url: entry.image_url || entry.image,
+                                    description: entry.image_description || entry.imageDescription,
+                                    uploadedBy: entry.created_by_user?.full_name || entry.uploaded_by || entry.created_by || 'Unknown User',
+                                    uploadDate: entry.created_at || entry.uploadDate || entry.upload_date
+                                  });
+                                }
                               }}
                             >
-                              <img
-                                src={entry.image_url || entry.image}
-                                alt="Progress"
-                                className="w-12 h-12 xs:w-14 xs:h-14 sm:w-16 sm:h-16 md:w-20 md:h-20 object-cover rounded-md sm:rounded-lg border border-gray-200 hover:opacity-80 transition-opacity"
-                              />
-                              {/* Eye Icon Overlay - Visual indicator */}
-                              <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-0 group-hover:bg-opacity-30 rounded-md sm:rounded-lg transition-all opacity-0 group-hover:opacity-100 pointer-events-none">
-                                <Eye className="w-3 h-3 xs:w-3.5 xs:h-3.5 sm:w-4 sm:h-4 text-white" />
-                              </div>
+                              {entry.image_url || entry.image ? (
+                                // Image is available - show it
+                                <>
+                                  <img
+                                    src={entry.image_url || entry.image}
+                                    alt="Progress"
+                                    className="w-12 h-12 xs:w-14 xs:h-14 sm:w-16 sm:h-16 md:w-20 md:h-20 object-cover rounded-md sm:rounded-lg border border-gray-200 hover:opacity-80 transition-opacity"
+                                    onLoad={() => {
+                                      const imageId = entry.id;
+                                      setLoadedImages(prev => new Set(prev).add(imageId));
+                                      setLoadingImages(prev => {
+                                        const next = new Set(prev);
+                                        next.delete(imageId);
+                                        return next;
+                                      });
+                                    }}
+                                    onError={() => {
+                                      const imageId = entry.id;
+                                      setLoadingImages(prev => {
+                                        const next = new Set(prev);
+                                        next.delete(imageId);
+                                        return next;
+                                      });
+                                    }}
+                                  />
+                                  {/* Eye Icon Overlay - Visual indicator */}
+                                  <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-0 group-hover:bg-opacity-30 rounded-md sm:rounded-lg transition-all opacity-0 group-hover:opacity-100 pointer-events-none">
+                                    <Eye className="w-3 h-3 xs:w-3.5 xs:h-3.5 sm:w-4 sm:h-4 text-white" />
+                                  </div>
+                                </>
+                              ) : (
+                                // Image is loading - show placeholder with animation
+                                <div className="w-12 h-12 xs:w-14 xs:h-14 sm:w-16 sm:h-16 md:w-20 md:h-20 rounded-md sm:rounded-lg border border-gray-200 bg-gradient-to-br from-gray-100 to-gray-200 flex items-center justify-center relative overflow-hidden">
+                                  {/* Shimmer animation */}
+                                  <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent animate-shimmer"></div>
+                                  {/* Loading spinner */}
+                                  <div className="relative z-10 flex flex-col items-center justify-center">
+                                    <div className="w-4 h-4 xs:w-5 xs:h-5 sm:w-6 sm:h-6 border-2 border-gray-300 border-t-blue-500 rounded-full animate-spin"></div>
+                                    <span className="text-[8px] xs:text-[9px] sm:text-[10px] text-gray-500 mt-1">Loading</span>
+                                  </div>
+                                </div>
+                              )}
                             </div>
                           )}
                           
@@ -1192,25 +1494,42 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
 
                           {/* Audio and Status */}
                           <div className="flex flex-col items-end gap-1.5 sm:gap-2 flex-shrink-0">
-                            {/* Audio Player */}
-                            {(entry.audio_data || entry.audio) && (
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  playAudio(entry.audio_data || entry.audio, entry.id);
-                                }}
-                                className="flex items-center gap-1 xs:gap-1.5 px-1.5 xs:px-2 py-0.5 xs:py-1 sm:px-2.5 sm:py-1 bg-green-50 hover:bg-green-100 rounded-md sm:rounded-lg border border-green-200 transition-colors"
-                                title={playingAudioId === entry.id ? "Pause audio" : "Play audio"}
-                              >
-                                {playingAudioId === entry.id ? (
-                                  <Pause className="w-2.5 h-2.5 xs:w-3 xs:h-3 sm:w-3.5 sm:h-3.5 text-green-700" />
-                                ) : (
-                                  <Play className="w-2.5 h-2.5 xs:w-3 xs:h-3 sm:w-3.5 sm:h-3.5 text-green-700 ml-0.5" />
-                                )}
-                                <span className="text-[9px] xs:text-[10px] sm:text-xs font-medium text-green-700">
-                                  {formatDuration(entry.audio_duration || entry.audioDuration)}
-                                </span>
-                              </button>
+                            {/* Audio Player with Loading State */}
+                            {/* Only show audio UI if entry actually has audio (audio_data, audio, or audio_url from cache) */}
+                            {(entry.audio_data || entry.audio || entry.audio_url) && (
+                              <>
+                                {entry.audio_data || entry.audio ? (
+                                  // Audio is available - show play button
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      playAudio(entry.audio_data || entry.audio, entry.id);
+                                    }}
+                                    className="flex items-center gap-1 xs:gap-1.5 px-1.5 xs:px-2 py-0.5 xs:py-1 sm:px-2.5 sm:py-1 bg-green-50 hover:bg-green-100 rounded-md sm:rounded-lg border border-green-200 transition-colors"
+                                    title={playingAudioId === entry.id ? "Pause audio" : "Play audio"}
+                                  >
+                                    {playingAudioId === entry.id ? (
+                                      <Pause className="w-2.5 h-2.5 xs:w-3 xs:h-3 sm:w-3.5 sm:h-3.5 text-green-700" />
+                                    ) : (
+                                      <Play className="w-2.5 h-2.5 xs:w-3 xs:h-3 sm:w-3.5 sm:h-3.5 text-green-700 ml-0.5" />
+                                    )}
+                                    <span className="text-[9px] xs:text-[10px] sm:text-xs font-medium text-green-700">
+                                      {formatDuration(entry.audio_duration || entry.audioDuration)}
+                                    </span>
+                                  </button>
+                                ) : entry.audio_url ? (
+                                  // Audio URL exists but audio data not loaded yet - show loading placeholder
+                                  <div className="flex items-center gap-1 xs:gap-1.5 px-1.5 xs:px-2 py-0.5 xs:py-1 sm:px-2.5 sm:py-1 bg-gray-50 rounded-md sm:rounded-lg border border-gray-200 relative overflow-hidden">
+                                    {/* Shimmer animation */}
+                                    <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent animate-shimmer"></div>
+                                    {/* Loading spinner and text */}
+                                    <div className="relative z-10 flex items-center gap-1 xs:gap-1.5">
+                                      <div className="w-2.5 h-2.5 xs:w-3 xs:h-3 sm:w-3.5 sm:h-3.5 border-2 border-gray-300 border-t-green-500 rounded-full animate-spin"></div>
+                                      <span className="text-[9px] xs:text-[10px] sm:text-xs font-medium text-gray-600">Loading...</span>
+                                    </div>
+                                  </div>
+                                ) : null}
+                              </>
                             )}
                             {/* Status Badge */}
                             <span className="inline-flex items-center px-1.5 xs:px-2 sm:px-2.5 md:px-3 py-0.5 rounded-full text-[9px] xs:text-[10px] sm:text-xs md:text-sm font-medium bg-green-100 text-green-800 border border-green-200">
@@ -1700,4 +2019,31 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
 };
 
 export default CompanyHighlights;
+
+// Add shimmer animation styles (if not in global CSS)
+// This can be added to your global CSS file or Tailwind config
+const shimmerStyles = `
+  @keyframes shimmer {
+    0% {
+      transform: translateX(-100%);
+    }
+    100% {
+      transform: translateX(100%);
+    }
+  }
+  .animate-shimmer {
+    animation: shimmer 2s infinite;
+  }
+`;
+
+// Inject styles if not already present
+if (typeof document !== 'undefined') {
+  const styleId = 'company-highlights-shimmer';
+  if (!document.getElementById(styleId)) {
+    const style = document.createElement('style');
+    style.id = styleId;
+    style.textContent = shimmerStyles;
+    document.head.appendChild(style);
+  }
+}
 

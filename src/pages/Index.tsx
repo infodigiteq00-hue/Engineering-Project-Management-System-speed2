@@ -17,7 +17,7 @@ import { useToast } from "@/hooks/use-toast";
 import axios from "axios";
 import { logProjectCreated, logProjectUpdated, logProjectDeleted } from "@/lib/activityLogger";
 import { generateRecommendationLetterWord } from "@/utils/wordGenerator";
-import { getCache, setCache, prefetchWithCache, CACHE_KEYS, clearCache, removeCache, initializeCacheCleanup } from "@/utils/cache";
+import { getCache, setCache, prefetchWithCache, CACHE_KEYS, clearCache, removeCache, initializeCacheCleanup, updateCacheRemoveItem, updateCacheUpsertItem } from "@/utils/cache";
 
 
 
@@ -193,17 +193,41 @@ const Index = () => {
           setUserEmail('');
         }
         
-        // Fetch firm data if firm_id is available
+        // Fetch firm data if firm_id is available (with caching - priority loader)
         if (userData && userData.firm_id) {
           try {
-            const firmData = await fastAPI.getFirmById(userData.firm_id);
+            // Cache key for firm logo (per firm_id)
+            const firmLogoCacheKey = `${CACHE_KEYS.FIRM_LOGO}_${userData.firm_id}`;
+            
+            // Fetch with cache (priority loader - never cleared)
+            const firmData = await prefetchWithCache(
+              firmLogoCacheKey,
+              async () => {
+                const data = await fastAPI.getFirmById(userData.firm_id);
+                return {
+                  name: data?.name || '',
+                  logo_url: data?.logo_url || null
+                };
+              },
+              { 
+                ttl: 24 * 60 * 60 * 1000, // 24 hours TTL (same as tab counters)
+                maxSize: 500 * 1024 // 500KB max (logo URL is small)
+              }
+            );
+            
             if (firmData) {
               setFirmName(firmData.name || '');
               setFirmLogo(firmData.logo_url || null);
             }
           } catch (error) {
             console.error('❌ Error fetching firm data:', error);
-            // Continue without firm data
+            // Try to use cached logo if available
+            const firmLogoCacheKey = `${CACHE_KEYS.FIRM_LOGO}_${userData.firm_id}`;
+            const cachedFirmData = getCache<{ name: string; logo_url: string | null }>(firmLogoCacheKey);
+            if (cachedFirmData) {
+              setFirmName(cachedFirmData.name || '');
+              setFirmLogo(cachedFirmData.logo_url || null);
+            }
           }
         }
         
@@ -932,20 +956,22 @@ const Index = () => {
       setProjects(transformedProjects);
       setFilteredProjects(transformedProjects);
       
-      // Invalidate and update project cards cache (lightweight version)
-      // Only cache active projects (not completed), limit to 24 projects max
+      // Incremental cache update: Add new project to cache (don't clear entire cache)
       const cacheKey = `${CACHE_KEYS.PROJECT_CARDS}_${firmId}_${userRole || 'none'}_${userId || 'none'}`;
-      const activeProjects = transformedProjects
-        .filter((p: any) => p.status !== 'completed')
-        .slice(0, 24); // Limit to 24 projects max
-      const lightweightProjects = activeProjects.map((p: any) => ({
-        ...p,
-        equipment: [] // Remove equipment array to save space
-      }));
-      setCache(cacheKey, lightweightProjects, { 
-        ttl: 10 * 60 * 1000, // 10 minutes TTL
-        maxSize: 1 * 1024 * 1024 // 1MB max
-      });
+      // Find the newly added project (it should be in transformedProjects but not in current projects)
+      const newProject = transformedProjects.find((p: any) => !projects.find((existing: any) => existing.id === p.id));
+      if (newProject && newProject.status !== 'completed') {
+        // Create lightweight version for cache
+        const lightweightProject = {
+          ...newProject,
+          equipment: [] // Remove equipment array to save space
+        };
+        // Incremental update: add new project to cache, keep rest intact
+        updateCacheUpsertItem(cacheKey, lightweightProject, { 
+          ttl: 10 * 60 * 1000, // 10 minutes TTL
+          maxSize: 1 * 1024 * 1024 // 1MB max
+        });
+      }
       
     } catch (error) {
       console.error('❌ Error refreshing projects:', error);
@@ -1068,25 +1094,11 @@ const Index = () => {
   const handleDeleteProject = async (projectId: string) => {
     if (window.confirm('Are you sure you want to delete this project? This action cannot be undone. This will also delete all associated equipment.')) {
       try {
-        
-        // First, delete all associated equipment
-        try {
-          const equipmentResponse = await fastAPI.getEquipmentByProject(projectId);
-          const equipmentArray = equipmentResponse as any[];
-          if (equipmentArray && equipmentArray.length > 0) {
-            for (const equipment of equipmentArray) {
-              await fastAPI.deleteEquipment(equipment.id);
-            }
-          }
-        } catch (equipmentError) {
-          console.warn('⚠️ Could not delete associated equipment:', equipmentError);
-        }
-        
         // Get project name for logging before deletion
         const projectToDelete = projects.find(p => p.id === projectId);
         const projectName = projectToDelete?.name || 'Unknown Project';
         
-        // Then delete the project
+        // Delete the project (this will also delete all associated equipment and dependencies)
         await fastAPI.deleteProject(projectId);
         
         // Log project deletion
@@ -1096,17 +1108,21 @@ const Index = () => {
           setProjects(prev => prev.filter(p => p.id !== projectId));
           setFilteredProjects(prev => prev.filter(p => p.id !== projectId));
           
-          // Invalidate project cards cache
+          // Update project cards cache incrementally (remove only this project, keep rest)
           const userData = JSON.parse(localStorage.getItem('userData') || '{}');
           const firmId = userData.firm_id;
           const userRole = localStorage.getItem('userRole');
           const userId = localStorage.getItem('userId');
           if (firmId) {
             const cacheKey = `${CACHE_KEYS.PROJECT_CARDS}_${firmId}_${userRole || 'none'}_${userId || 'none'}`;
-            removeCache(cacheKey);
+            // Incremental update: remove only this project from cache, keep rest intact
+            updateCacheRemoveItem(cacheKey, projectId, { 
+              ttl: 10 * 60 * 1000, // 10 minutes TTL
+              maxSize: 1 * 1024 * 1024 // 1MB max
+            });
           }
           
-          // Also invalidate equipment cache for this project
+          // Remove equipment cache for this project (project-specific, safe to remove)
           removeCache(`${CACHE_KEYS.EQUIPMENT}_${projectId}`);
         
         // Navigate back to project list if currently viewing the deleted project
@@ -1803,25 +1819,32 @@ Note: Please download the Recommendation Letter template using the link above, f
         } : p
     ));
     
-    // Update project cards cache (lightweight version)
-    // Only cache active projects (not completed), limit to 24 projects max
+    // Incremental cache update: Update only this project in cache (don't clear entire cache)
     const userData = JSON.parse(localStorage.getItem('userData') || '{}');
     const firmId = userData.firm_id;
     const userRole = localStorage.getItem('userRole');
     const userId = localStorage.getItem('userId');
     if (firmId) {
       const cacheKey = `${CACHE_KEYS.PROJECT_CARDS}_${firmId}_${userRole || 'none'}_${userId || 'none'}`;
-      const activeProjects = updatedProjects
-        .filter((p: any) => p.status !== 'completed')
-        .slice(0, 24); // Limit to 24 projects max
-      const lightweightProjects = activeProjects.map((p: any) => ({
-        ...p,
-        equipment: [] // Remove equipment array to save space
-      }));
-      setCache(cacheKey, lightweightProjects, { 
-        ttl: 10 * 60 * 1000, // 10 minutes TTL
-        maxSize: 1 * 1024 * 1024 // 1MB max
-      });
+      const updatedProject = updatedProjects.find((p: any) => p.id === updatedProjectData.id);
+      if (updatedProject && updatedProject.status !== 'completed') {
+        // Create lightweight version for cache
+        const lightweightProject = {
+          ...updatedProject,
+          equipment: [] // Remove equipment array to save space
+        };
+        // Incremental update: update only this project in cache, keep rest intact
+        updateCacheUpsertItem(cacheKey, lightweightProject, { 
+          ttl: 10 * 60 * 1000, // 10 minutes TTL
+          maxSize: 1 * 1024 * 1024 // 1MB max
+        });
+      } else if (updatedProject && updatedProject.status === 'completed') {
+        // If project is now completed, remove it from cache
+        updateCacheRemoveItem(cacheKey, updatedProjectData.id, { 
+          ttl: 10 * 60 * 1000,
+          maxSize: 1 * 1024 * 1024
+        });
+      }
     }
       
     setShowAddProjectForm(false);
