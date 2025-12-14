@@ -180,6 +180,16 @@ export const setCache = <T>(key: string, data: T, options: CacheOptions = {}): v
     const now = Date.now();
     const expiresAt = now + ttl;
 
+    // CRITICAL FIX: Don't cache empty arrays/objects - they're not useful and waste space
+    if (Array.isArray(data) && data.length === 0) {
+      console.warn(`⚠️ Not caching empty array for key: ${cacheKey}`);
+      return;
+    }
+    if (data && typeof data === 'object' && Object.keys(data).length === 0) {
+      console.warn(`⚠️ Not caching empty object for key: ${cacheKey}`);
+      return;
+    }
+
     const cacheItem: CacheItem<T> = {
       data,
       timestamp: now,
@@ -389,13 +399,18 @@ export const clearCache = (prefix?: string): void => {
       CACHE_KEYS.COMPANY_HIGHLIGHTS_MILESTONE, // Company highlights - preserve
     ];
     
-    for (let i = 0; i < localStorage.length; i++) {
+    // OPTIMIZATION: Batch process keys to avoid blocking UI
+    // Process in chunks to prevent blocking on large cache
+    const maxKeysToProcess = 100; // Process max 100 keys at a time
+    let processedCount = 0;
+    
+    for (let i = 0; i < localStorage.length && processedCount < maxKeysToProcess; i++) {
       const key = localStorage.key(i);
       if (key && key.startsWith(cachePrefix)) {
+        processedCount++;
         // Check if this is a critical cache key
         const isCritical = criticalKeyPatterns.some(criticalPattern => {
-          const fullCriticalKey = getCacheKey(criticalPattern);
-          return key === fullCriticalKey || key.includes(criticalPattern);
+          return key.includes(criticalPattern);
         });
         
         // Only remove non-critical caches
@@ -405,8 +420,47 @@ export const clearCache = (prefix?: string): void => {
       }
     }
     
-    keysToRemove.forEach(key => localStorage.removeItem(key));
-    console.log(`🧹 [Cache] Cleared ${keysToRemove.length} cache entries (preserved critical caches)`);
+    // Remove keys in batch (optimized for performance)
+    // Use setTimeout to make it non-blocking if there are many keys
+    if (keysToRemove.length > 50) {
+      // For large batches, process in chunks to avoid blocking
+      const chunkSize = 50;
+      const chunks: string[][] = [];
+      for (let i = 0; i < keysToRemove.length; i += chunkSize) {
+        chunks.push(keysToRemove.slice(i, i + chunkSize));
+      }
+      
+      chunks.forEach((chunk, index) => {
+        setTimeout(() => {
+          chunk.forEach(key => {
+            try {
+              localStorage.removeItem(key);
+            } catch (e) {
+              // Ignore individual removal errors
+            }
+          });
+        }, index * 10); // Stagger removals by 10ms
+      });
+      
+      console.log(`🧹 [Cache] Clearing ${keysToRemove.length} cache entries in chunks (non-blocking)`);
+    } else {
+      // Small batch - remove immediately
+      keysToRemove.forEach(key => {
+        try {
+          localStorage.removeItem(key);
+        } catch (e) {
+          // Ignore individual removal errors
+        }
+      });
+      if (keysToRemove.length > 0) {
+        console.log(`🧹 [Cache] Cleared ${keysToRemove.length} cache entries (preserved critical caches)`);
+      }
+    }
+    
+    // If there are more keys to process, schedule another batch (non-blocking)
+    if (processedCount >= maxKeysToProcess) {
+      setTimeout(() => clearCache(prefix), 0);
+    }
   } catch (error) {
     console.warn('Failed to clear cache:', error);
   }
@@ -448,11 +502,70 @@ export const CACHE_KEYS = {
 } as const;
 
 /**
+ * Clean up duplicate cache entries (e.g., keys with "none_none" when proper values exist)
+ */
+export const cleanupDuplicateCacheKeys = (): void => {
+  try {
+    const keysToRemove: string[] = [];
+    
+    // Find all cache keys
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key || !key.startsWith(CACHE_PREFIX)) continue;
+      
+      // Check for duplicate keys with "none_none" pattern
+      // These are created when firmId/userId aren't loaded yet
+      if (key.includes('_none_none')) {
+        // Extract the base key pattern (everything before _none_none)
+        const baseKeyMatch = key.match(/^(.+)_none_none$/);
+        if (baseKeyMatch) {
+          const baseKey = baseKeyMatch[1];
+          // Check if a proper version exists (with actual firmId/userId, not "none")
+          let hasProperVersion = false;
+          for (let j = 0; j < localStorage.length; j++) {
+            const otherKey = localStorage.key(j);
+            if (otherKey && otherKey.startsWith(CACHE_PREFIX) && otherKey.startsWith(baseKey + '_') && !otherKey.includes('_none_none')) {
+              // Check if it has proper UUIDs (not "none")
+              const parts = otherKey.split('_');
+              const lastParts = parts.slice(-2); // Last 2 parts should be userRole and userId
+              if (lastParts[0] !== 'none' && lastParts[1] !== 'none') {
+                hasProperVersion = true;
+                break;
+              }
+            }
+          }
+          
+          // If proper version exists, mark the "none_none" version for removal
+          if (hasProperVersion) {
+            keysToRemove.push(key);
+          }
+        }
+      }
+    }
+    
+    // Remove duplicate keys
+    keysToRemove.forEach(key => {
+      localStorage.removeItem(key);
+      console.log(`🧹 [Cache] Removed duplicate cache key: ${key}`);
+    });
+    
+    if (keysToRemove.length > 0) {
+      console.log(`🧹 [Cache] Cleaned up ${keysToRemove.length} duplicate cache entries`);
+    }
+  } catch (error) {
+    console.warn('Failed to cleanup duplicate cache keys:', error);
+  }
+};
+
+/**
  * Initialize cache cleanup on app startup
  * Call this once when the app loads
  */
 export const initializeCacheCleanup = (): void => {
-  // Clean up expired entries on startup
+  // First, clean up duplicate cache keys (e.g., "none_none" duplicates)
+  cleanupDuplicateCacheKeys();
+  
+  // Then, clean up expired entries on startup
   cleanupCache();
   console.log('🧹 [Cache] Initialized cache cleanup');
 };

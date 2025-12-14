@@ -83,25 +83,27 @@ const SuperAdminDashboard = () => {
 
   const handleLogout = async () => {
     try {
-      // console.log('🚪 Logout initiated...');
+      // CRITICAL: Preserve ALL metadata cache across sessions for faster login
+      // Only clear auth-related items, NOT metadata cache
+      const authKeys = [
+        'userData', 'userRole', 'userName', 'userEmail', 'firmId', 'userId',
+        'sb-access-token', 'sb-refresh-token'
+      ];
       
-      // IMMEDIATE: Clear ALL storage first (but preserve critical caches)
-      // Use synchronous approach to preserve critical caches
-      const tabCounters = localStorage.getItem('epms_cache_tab_counters');
-      const summaryStats = localStorage.getItem('epms_cache_summary_stats');
-      const standaloneEquipment = localStorage.getItem('epms_cache_equipment_standalone');
-      
-      localStorage.clear();
-      
-      // Restore critical caches immediately
-      if (tabCounters) localStorage.setItem('epms_cache_tab_counters', tabCounters);
-      if (summaryStats) localStorage.setItem('epms_cache_summary_stats', summaryStats);
-      if (standaloneEquipment) localStorage.setItem('epms_cache_equipment_standalone', standaloneEquipment);
+      // Clear only auth-related keys, preserve all cache (metadata)
+      const allKeys = Object.keys(localStorage);
+      allKeys.forEach(key => {
+        // Only remove auth-related keys, preserve all cache (metadata)
+        if (key.startsWith('sb-') || authKeys.includes(key)) {
+          localStorage.removeItem(key);
+        }
+      });
       
       sessionStorage.clear();
       
+      console.log('✅ Logged out - ALL metadata cache preserved for next login');
+      
       // IMMEDIATE: Force redirect right away (don't wait for signOut)
-      // console.log('✅ Clearing storage and redirecting immediately...');
       window.location.replace('/login');
       
       // Continue signOut in background (non-blocking)
@@ -120,16 +122,19 @@ const SuperAdminDashboard = () => {
       
     } catch (error) {
       console.error('❌ Error during logout:', error);
-      // Even if everything fails, preserve critical caches
-      const tabCounters = localStorage.getItem('epms_cache_tab_counters');
-      const summaryStats = localStorage.getItem('epms_cache_summary_stats');
-      const standaloneEquipment = localStorage.getItem('epms_cache_equipment_standalone');
+      // Even if everything fails, preserve ALL metadata cache
+      const authKeys = [
+        'userData', 'userRole', 'userName', 'userEmail', 'firmId', 'userId',
+        'sb-access-token', 'sb-refresh-token'
+      ];
       
-      localStorage.clear();
-      
-      if (tabCounters) localStorage.setItem('epms_cache_tab_counters', tabCounters);
-      if (summaryStats) localStorage.setItem('epms_cache_summary_stats', summaryStats);
-      if (standaloneEquipment) localStorage.setItem('epms_cache_equipment_standalone', standaloneEquipment);
+      // Clear only auth-related keys, preserve all cache (metadata)
+      const allKeys = Object.keys(localStorage);
+      allKeys.forEach(key => {
+        if (key.startsWith('sb-') || authKeys.includes(key)) {
+          localStorage.removeItem(key);
+        }
+      });
       
       sessionStorage.clear();
       window.location.replace('/login');

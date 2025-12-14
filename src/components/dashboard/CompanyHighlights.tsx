@@ -4,7 +4,7 @@ import { activityApi } from '@/lib/activityApi';
 import axios from 'axios';
 import { Clock, User, FileText, CheckCircle, Send, Play, Pause, X, Eye, Search } from 'lucide-react';
 import { Input } from '@/components/ui/input';
-import { getCache, setCache, prefetchWithCache, CACHE_KEYS } from '@/utils/cache';
+import { getCache, setCache, prefetchWithCache, CACHE_KEYS, removeCache } from '@/utils/cache';
 
 interface CompanyHighlightsProps {
   onSelectProject?: (projectId: string, initialTab?: string) => void;
@@ -252,7 +252,7 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
     return new Date().toISOString();
   }, []); // Only recalculate when component mounts, not on every render
 
-  // Helper: Create lightweight metadata for progress images (include image URLs - they're just strings, very lightweight)
+  // Helper: Create lightweight metadata for progress images (no image URLs)
   const createLightweightProgressImages = (images: any[]) => {
     return images.slice(0, 30).map((img: any) => ({
       id: img.id,
@@ -261,8 +261,6 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
       upload_date: img.upload_date,
       entry_type: img.entry_type || 'progress_image',
       created_at: img.created_at,
-      image_url: img.image_url || img.image, // Include image URL (just a string, ~300 bytes)
-      image_description: img.image_description || img.imageDescription,
       equipment: img.equipment ? {
         id: img.equipment.id,
         tag_number: img.equipment.tag_number,
@@ -274,11 +272,11 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
           name: img.equipment.projects.name
         } : null
       } : null,
-      // Image URLs are lightweight (just strings), so we cache them for faster loading
+      // Don't include image_url - load on-demand
     }));
   };
 
-  // Helper: Create lightweight metadata for progress entries (include image URLs and audio URLs - they're just strings, very lightweight)
+  // Helper: Create lightweight metadata for progress entries (no audio data)
   const createLightweightProgressEntries = (entries: any[]) => {
     return entries.slice(0, 30).map((entry: any) => ({
       id: entry.id,
@@ -286,10 +284,6 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
       entry_type: entry.entry_type || entry.type,
       created_at: entry.created_at || entry.date,
       created_by: entry.created_by,
-      image_url: entry.image_url || entry.image, // Include image URL if exists (just a string, ~300 bytes)
-      image_description: entry.image_description || entry.imageDescription,
-      audio_url: entry.audio_url || entry.audio, // Include audio URL if exists (just a string, ~300 bytes)
-      audio_duration: entry.audio_duration || entry.audioDuration, // Duration is just a number
       equipment: entry.equipment ? {
         id: entry.equipment.id,
         tag_number: entry.equipment.tag_number,
@@ -301,8 +295,7 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
           name: entry.equipment.projects.name
         } : null
       } : null,
-      // Image/audio URLs are lightweight (just strings), so we cache them for faster loading
-      // Don't include actual audio_data (base64) - that's heavy, load on-demand
+      // Don't include audio_data - load on-demand
     }));
   };
 
@@ -322,36 +315,84 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
     const fetchProductionUpdates = async () => {
       try {
         if (productionSubTab === 'key-progress') {
+          // CRITICAL FIX: Wait for firmId/userId to be available before creating cache key
+          // This prevents creating duplicate cache keys with "none_none"
+          if (!firmId) {
+            console.warn('⚠️ firmId not available yet, skipping cache');
+            setLoading(false);
+            return;
+          }
+          
           // Cache key for Key Progress (metadata only, 30 latest, 7 days)
           const cacheKey = `${CACHE_KEYS.COMPANY_HIGHLIGHTS_PRODUCTION_KEY_PROGRESS}_${firmId}_${userRole || 'none'}_${userId || 'none'}`;
           
+          // Clean up old duplicate cache keys (with "none_none")
+          const oldCacheKey = `${CACHE_KEYS.COMPANY_HIGHLIGHTS_PRODUCTION_KEY_PROGRESS}_none_none`;
+          removeCache(oldCacheKey);
+          
           // Step 1: Fetch cached metadata (instant display)
-          const cachedMetadata = await prefetchWithCache(
-            cacheKey,
-            async () => {
-              const data = await fastAPI.getAllProgressImages(
-                cacheDateRangeStart, // Always use 7 days for cache
-                dateRangeEnd,
-                userRole === 'firm_admin' ? undefined : assignedProjectIds
-              );
-              // Create lightweight metadata (limit to 30, no image URLs)
-              return createLightweightProgressImages(Array.isArray(data) ? data : []);
-            },
-            { 
-              ttl: 10 * 60 * 1000, // 10 minutes TTL
-              maxSize: 1 * 1024 * 1024 // 1MB max
+          let cachedMetadata: any[] = [];
+          try {
+            cachedMetadata = await prefetchWithCache(
+              cacheKey,
+              async () => {
+                const data = await fastAPI.getAllProgressImages(
+                  cacheDateRangeStart, // Always use 7 days for cache
+                  dateRangeEnd,
+                  userRole === 'firm_admin' ? undefined : assignedProjectIds
+                );
+                const dataArray = Array.isArray(data) ? data : [];
+                // CRITICAL FIX: Don't cache empty arrays - only cache if we have data
+                if (dataArray.length === 0) {
+                  console.warn('⚠️ No progress images data, not caching empty array');
+                  return [];
+                }
+                // Create lightweight metadata (limit to 30, no image URLs)
+                return createLightweightProgressImages(dataArray);
+              },
+              { 
+                ttl: 10 * 60 * 1000, // 10 minutes TTL
+                maxSize: 1 * 1024 * 1024 // 1MB max
+              }
+            );
+            
+            // CRITICAL FIX: If prefetchWithCache returns empty array, try to get stale cache
+            // But only if it's a real empty (not an error)
+            if (!cachedMetadata || (Array.isArray(cachedMetadata) && cachedMetadata.length === 0)) {
+              const staleCache = getCache<any[]>(cacheKey, {}, true); // Allow stale cache
+              if (staleCache && Array.isArray(staleCache) && staleCache.length > 0) {
+                console.log('⚠️ Using stale cache as fallback (prefetch returned empty)');
+                cachedMetadata = staleCache;
+              }
             }
-          );
+          } catch (prefetchError) {
+            // If prefetchWithCache fails, try to get stale cache
+            console.warn('prefetchWithCache failed, trying stale cache:', prefetchError);
+            const staleCache = getCache<any[]>(cacheKey, {}, true); // Allow stale cache
+            if (staleCache && Array.isArray(staleCache) && staleCache.length > 0) {
+              cachedMetadata = staleCache;
+            }
+          }
           
           // Step 2: Show metadata immediately (even without images)
+          // CRITICAL FIX: Only update state if we have data, otherwise keep existing state
           if (isMounted && !abortController.signal.aborted) {
-            const filteredImages = filterByAssignedProjects(cachedMetadata, 'equipment.project_id');
-            if (Array.isArray(filteredImages) && filteredImages.length > 0) {
-              setProductionUpdates(filteredImages);
-            } else if (Array.isArray(cachedMetadata) && cachedMetadata.length > 0) {
-              setProductionUpdates(cachedMetadata);
+            // Only update state if we have valid cached metadata
+            if (Array.isArray(cachedMetadata) && cachedMetadata.length > 0) {
+              const filteredImages = filterByAssignedProjects(cachedMetadata, 'equipment.project_id');
+              // Use filtered if available and has items, otherwise use cached metadata
+              setProductionUpdates(filteredImages.length > 0 ? filteredImages : cachedMetadata);
             }
-            setLoading(false);
+            // If cachedMetadata is empty, don't update state - keep existing state
+            // This prevents clearing display when backend returns 500 error
+            
+            // Keep loader visible for minimum 800ms so user sees "Collecting all updates..." message
+            // This provides better UX feedback even when cache loads instantly
+            setTimeout(() => {
+              if (isMounted && !abortController.signal.aborted) {
+                setLoading(false);
+              }
+            }, 800);
           }
           
           // Step 3: Fetch full data with image URLs in background (non-blocking)
@@ -367,54 +408,107 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
                   // Limit to 30 and filter
                   const limitedFullImages = fullImages.slice(0, 30);
                   const filteredFullImages = filterByAssignedProjects(limitedFullImages, 'equipment.project_id');
-                  // Update with full data (including image URLs)
-                  if (Array.isArray(filteredFullImages) && filteredFullImages.length > 0) {
-                    setProductionUpdates(filteredFullImages);
+                  // CRITICAL FIX: Always update state (even if empty) to prevent stale data
+                  // Only update if we have data, otherwise keep existing state
+                  if (Array.isArray(filteredFullImages)) {
+                    // Only update if we have new data, otherwise keep showing cached
+                    if (filteredFullImages.length > 0) {
+                      setProductionUpdates(filteredFullImages);
+                    }
+                    // Update cache with lightweight version (only if we have data - don't cache empty)
+                    if (limitedFullImages.length > 0) {
+                      const lightweight = createLightweightProgressImages(limitedFullImages);
+                      setCache(cacheKey, lightweight, { 
+                        ttl: 10 * 60 * 1000,
+                        maxSize: 1 * 1024 * 1024
+                      });
+                    }
                   }
-                  // Update cache with lightweight version
-                  const lightweight = createLightweightProgressImages(limitedFullImages);
-                  setCache(cacheKey, lightweight, { 
-                    ttl: 10 * 60 * 1000,
-                    maxSize: 1 * 1024 * 1024
-                  });
                 }
               })
               .catch((error) => {
-                // If full fetch fails, keep showing cached metadata
+                // If full fetch fails, keep showing cached metadata (don't clear state)
                 console.warn('Background image fetch failed, keeping cached metadata:', error);
+                // Don't update state - keep showing what we have
               });
           }
         } else {
+          // CRITICAL FIX: Wait for firmId/userId to be available before creating cache key
+          if (!firmId) {
+            console.warn('⚠️ firmId not available yet, skipping cache');
+            setLoading(false);
+            return;
+          }
+          
           // Cache key for All Updates (metadata only, 30 latest, 7 days)
           const cacheKey = `${CACHE_KEYS.COMPANY_HIGHLIGHTS_PRODUCTION_ALL_UPDATES}_${firmId}_${userRole || 'none'}_${userId || 'none'}`;
           
+          // Clean up old duplicate cache keys (with "none_none")
+          const oldCacheKey = `${CACHE_KEYS.COMPANY_HIGHLIGHTS_PRODUCTION_ALL_UPDATES}_none_none`;
+          removeCache(oldCacheKey);
+          
           // Step 1: Fetch cached metadata (instant display)
-          const cachedMetadata = await prefetchWithCache(
-            cacheKey,
-            async () => {
-              const data = await fastAPI.getAllProgressEntries(
-                cacheDateRangeStart, // Always use 7 days for cache
-                dateRangeEnd,
-                userRole === 'firm_admin' ? undefined : assignedProjectIds
-              );
-              // Create lightweight metadata (limit to 30, no audio data)
-              return createLightweightProgressEntries(Array.isArray(data) ? data : []);
-            },
-            { 
-              ttl: 10 * 60 * 1000, // 10 minutes TTL
-              maxSize: 1 * 1024 * 1024 // 1MB max
+          let cachedMetadata: any[] = [];
+          try {
+            cachedMetadata = await prefetchWithCache(
+              cacheKey,
+              async () => {
+                const data = await fastAPI.getAllProgressEntries(
+                  cacheDateRangeStart, // Always use 7 days for cache
+                  dateRangeEnd,
+                  userRole === 'firm_admin' ? undefined : assignedProjectIds
+                );
+                const dataArray = Array.isArray(data) ? data : [];
+                // CRITICAL FIX: Don't cache empty arrays - only cache if we have data
+                if (dataArray.length === 0) {
+                  console.warn('⚠️ No progress entries data, not caching empty array');
+                  return [];
+                }
+                // Create lightweight metadata (limit to 30, no audio data)
+                return createLightweightProgressEntries(dataArray);
+              },
+              { 
+                ttl: 10 * 60 * 1000, // 10 minutes TTL
+                maxSize: 1 * 1024 * 1024 // 1MB max
+              }
+            );
+            
+            // CRITICAL FIX: If prefetchWithCache returns empty array, try to get stale cache
+            if (!cachedMetadata || (Array.isArray(cachedMetadata) && cachedMetadata.length === 0)) {
+              const staleCache = getCache<any[]>(cacheKey, {}, true); // Allow stale cache
+              if (staleCache && Array.isArray(staleCache) && staleCache.length > 0) {
+                console.log('⚠️ Using stale cache as fallback (prefetch returned empty)');
+                cachedMetadata = staleCache;
+              }
             }
-          );
+          } catch (prefetchError) {
+            // If prefetchWithCache fails, try to get stale cache
+            console.warn('prefetchWithCache failed, trying stale cache:', prefetchError);
+            const staleCache = getCache<any[]>(cacheKey, {}, true); // Allow stale cache
+            if (staleCache && Array.isArray(staleCache) && staleCache.length > 0) {
+              cachedMetadata = staleCache;
+            }
+          }
           
           // Step 2: Show metadata immediately (even without audio)
+          // CRITICAL FIX: Only update state if we have data, otherwise keep existing state
           if (isMounted && !abortController.signal.aborted) {
-            const filteredEntries = filterByAssignedProjects(cachedMetadata, 'equipment.project_id');
-            if (Array.isArray(filteredEntries) && filteredEntries.length > 0) {
-              setProductionUpdates(filteredEntries);
-            } else if (Array.isArray(cachedMetadata) && cachedMetadata.length > 0) {
-              setProductionUpdates(cachedMetadata);
+            // Only update state if we have valid cached metadata
+            if (Array.isArray(cachedMetadata) && cachedMetadata.length > 0) {
+              const filteredEntries = filterByAssignedProjects(cachedMetadata, 'equipment.project_id');
+              // Use filtered if available and has items, otherwise use cached metadata
+              setProductionUpdates(filteredEntries.length > 0 ? filteredEntries : cachedMetadata);
             }
-            setLoading(false);
+            // If cachedMetadata is empty, don't update state - keep existing state
+            // This prevents clearing display when backend returns 500 error
+            
+            // Keep loader visible for minimum 800ms so user sees "Collecting all updates..." message
+            // This provides better UX feedback even when cache loads instantly
+            setTimeout(() => {
+              if (isMounted && !abortController.signal.aborted) {
+                setLoading(false);
+              }
+            }, 800);
           }
           
           // Step 3: Fetch full data with audio in background (non-blocking)
@@ -434,12 +528,14 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
                   if (Array.isArray(filteredFullEntries) && filteredFullEntries.length > 0) {
                     setProductionUpdates(filteredFullEntries);
                   }
-                  // Update cache with lightweight version
-                  const lightweight = createLightweightProgressEntries(limitedFullEntries);
-                  setCache(cacheKey, lightweight, { 
-                    ttl: 10 * 60 * 1000,
-                    maxSize: 1 * 1024 * 1024
-                  });
+                  // Update cache with lightweight version (only if we have data - don't cache empty)
+                  if (limitedFullEntries.length > 0) {
+                    const lightweight = createLightweightProgressEntries(limitedFullEntries);
+                    setCache(cacheKey, lightweight, { 
+                      ttl: 10 * 60 * 1000,
+                      maxSize: 1 * 1024 * 1024
+                    });
+                  }
                 }
               })
               .catch((error) => {
@@ -452,7 +548,24 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
         // Don't log aborted requests as errors
         if (error?.name !== 'AbortError' && isMounted && !abortController.signal.aborted) {
           console.error('Error fetching production updates:', error);
-          setProductionUpdates([]);
+          // CRITICAL FIX: Don't clear state on error - try to use stale cache as fallback
+          try {
+            const cacheKey = productionSubTab === 'key-progress'
+              ? `${CACHE_KEYS.COMPANY_HIGHLIGHTS_PRODUCTION_KEY_PROGRESS}_${firmId}_${userRole || 'none'}_${userId || 'none'}`
+              : `${CACHE_KEYS.COMPANY_HIGHLIGHTS_PRODUCTION_ALL_UPDATES}_${firmId}_${userRole || 'none'}_${userId || 'none'}`;
+            const staleCache = getCache<any[]>(cacheKey, {}, true); // Allow stale cache
+            if (staleCache && Array.isArray(staleCache) && staleCache.length > 0) {
+              console.log('⚠️ Using stale cache as fallback after error');
+              const filtered = filterByAssignedProjects(staleCache, 'equipment.project_id');
+              setProductionUpdates(filtered.length > 0 ? filtered : staleCache);
+            } else {
+              // Only clear if we truly have no cache at all
+              setProductionUpdates([]);
+            }
+          } catch (cacheError) {
+            // If cache read fails too, only then clear state
+            setProductionUpdates([]);
+          }
         }
         // Always set loading to false on error or abort
         if (isMounted && !abortController.signal.aborted) {
@@ -626,13 +739,16 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
     if (productionSubTab === 'key-progress') {
       // Filter to only show progress images
       // Progress images have entry_type === 'progress_image' (from getAllProgressImages)
+      // CRITICAL FIX: Include entries without entry_type if we're on key-progress (might be from cache)
       filtered = filtered.filter((entry: any) => {
-        return entry.entry_type === 'progress_image';
+        // Include if entry_type is 'progress_image' OR if entry_type is missing (assume it's a progress image from cache)
+        return entry.entry_type === 'progress_image' || !entry.entry_type;
       });
     } else {
       // Filter to only show progress entries (not progress images)
       // Progress entries have entry_type !== 'progress_image' (from getAllProgressEntries)
       filtered = filtered.filter((entry: any) => {
+        // Exclude progress images, include everything else (including entries without entry_type)
         return entry.entry_type !== 'progress_image';
       });
     }
@@ -1495,8 +1611,7 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
                           {/* Audio and Status */}
                           <div className="flex flex-col items-end gap-1.5 sm:gap-2 flex-shrink-0">
                             {/* Audio Player with Loading State */}
-                            {/* Only show audio UI if entry actually has audio (audio_data, audio, or audio_url from cache) */}
-                            {(entry.audio_data || entry.audio || entry.audio_url) && (
+                            {(entry.audio_data || entry.audio || (entry.entry_type && entry.entry_type !== 'progress_image')) && (
                               <>
                                 {entry.audio_data || entry.audio ? (
                                   // Audio is available - show play button
@@ -1517,8 +1632,8 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
                                       {formatDuration(entry.audio_duration || entry.audioDuration)}
                                     </span>
                                   </button>
-                                ) : entry.audio_url ? (
-                                  // Audio URL exists but audio data not loaded yet - show loading placeholder
+                                ) : (
+                                  // Audio is loading - show placeholder with animation
                                   <div className="flex items-center gap-1 xs:gap-1.5 px-1.5 xs:px-2 py-0.5 xs:py-1 sm:px-2.5 sm:py-1 bg-gray-50 rounded-md sm:rounded-lg border border-gray-200 relative overflow-hidden">
                                     {/* Shimmer animation */}
                                     <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent animate-shimmer"></div>
@@ -1528,7 +1643,7 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
                                       <span className="text-[9px] xs:text-[10px] sm:text-xs font-medium text-gray-600">Loading...</span>
                                     </div>
                                   </div>
-                                ) : null}
+                                )}
                               </>
                             )}
                             {/* Status Badge */}

@@ -22,77 +22,24 @@ const Login = () => {
   const isSubmittingRef = useRef(false);
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Clear stale auth data on component mount - MORE AGGRESSIVE CLEANUP
+  // Lightweight cleanup on component mount - non-blocking
   useEffect(() => {
-    const clearStaleAuthData = async () => {
-      try {
-        // console.log('🧹 AGGRESSIVE: Clearing ALL stale auth data...');
-        
-        // 1. Force sign out from Supabase (clears session)
-        try {
-          await supabase.auth.signOut();
-          // console.log('✅ Supabase session cleared');
-        } catch (signOutError) {
-          console.warn('⚠️ SignOut warning (non-fatal):', signOutError);
-          // Continue with localStorage cleanup even if signOut fails
-        }
-        
-        // 2. Clear ALL localStorage items (Supabase stores tokens here)
-        const allKeys = Object.keys(localStorage);
-        const supabaseKeys = allKeys.filter(key => 
-          key.startsWith('sb-') || 
-          key.includes('supabase') ||
-          key.includes('auth') ||
-          key === 'userData' || 
-          key === 'userRole' || 
-          key === 'userName' || 
-          key === 'userEmail' || 
-          key === 'firmId' || 
-          key === 'userId' ||
-          key === 'sb-access-token' ||
-          key === 'sb-refresh-token'
-        );
-        
-        supabaseKeys.forEach(key => {
-          // console.log('🗑️ Removing localStorage key:', key);
-          localStorage.removeItem(key);
-        });
-        
-        // 3. Clear ALL sessionStorage
-        sessionStorage.clear();
-        // console.log('✅ SessionStorage cleared');
-        
-        // 4. Force Supabase to refresh its internal state
-        try {
-          const { data: { session } } = await supabase.auth.getSession();
-          if (session) {
-            console.warn('⚠️ Session still exists after cleanup, forcing removal...');
-            await supabase.auth.signOut();
-            // Clear localStorage again
-            supabaseKeys.forEach(key => localStorage.removeItem(key));
-            // Wait for cleanup
-            await new Promise(resolve => setTimeout(resolve, 100));
-          }
-        } catch (e) {
-          console.warn('⚠️ Session check failed (non-fatal):', e);
-        }
-        
-        // console.log('✅ ALL stale auth data cleared');
-      } catch (error) {
-        console.error('❌ Error clearing stale auth data:', error);
-        // Even if cleanup fails, clear localStorage manually
-        try {
-          const allKeys = Object.keys(localStorage);
-          allKeys.filter(key => key.startsWith('sb-') || key.includes('auth')).forEach(key => {
-            localStorage.removeItem(key);
-          });
-        } catch (e) {
-          console.error('❌ Failed to clear localStorage:', e);
-        }
-      }
-    };
-
-    clearStaleAuthData();
+    // Only clear auth-related localStorage items (fast, synchronous)
+    // Don't do async operations that could block
+    try {
+      const authKeys = ['userData', 'userRole', 'userName', 'userEmail', 'firmId', 'userId'];
+      authKeys.forEach(key => localStorage.removeItem(key));
+      
+      // Clear Supabase auth tokens (synchronous)
+      const allKeys = Object.keys(localStorage);
+      allKeys.filter(key => key.startsWith('sb-')).forEach(key => {
+        localStorage.removeItem(key);
+      });
+      
+      sessionStorage.clear();
+    } catch (error) {
+      console.warn('⚠️ Cleanup warning (non-fatal):', error);
+    }
     
     // Cleanup timeout on unmount
     return () => {
@@ -170,66 +117,16 @@ const Login = () => {
     }, 30000); // 30 seconds timeout
 
     try {
-      // AGGRESSIVE session cleanup before new login
-      // console.log('🧹 AGGRESSIVE: Cleaning up any existing sessions before login...');
+      // Lightweight cleanup before login (fast, non-blocking)
+      // Only clear auth tokens synchronously - don't wait for async operations
       try {
-        // Step 1: Clear localStorage first (remove tokens before signOut)
         const allKeys = Object.keys(localStorage);
-        allKeys.filter(key => key.startsWith('sb-') || key.includes('supabase')).forEach(key => {
+        allKeys.filter(key => key.startsWith('sb-')).forEach(key => {
           localStorage.removeItem(key);
         });
-        
-        // Step 2: Force sign out (try both methods)
-        try {
-          await supabase.auth.signOut();
-        } catch (signOutErr) {
-          console.warn('⚠️ Standard signOut failed, trying alternate method:', signOutErr);
-        }
-        
-        // Step 3: Clear sessionStorage
         sessionStorage.clear();
-        
-        // Step 4: Verify and force clear again if needed
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session) {
-          console.warn('⚠️ Session still exists, forcing removal again...');
-          // Clear localStorage again
-          const remainingKeys = Object.keys(localStorage);
-          remainingKeys.filter(key => key.startsWith('sb-') || key.includes('supabase')).forEach(key => {
-            localStorage.removeItem(key);
-          });
-          // Try signOut again
-          await supabase.auth.signOut();
-          // Wait a bit for async cleanup
-          await new Promise(resolve => setTimeout(resolve, 200));
-        }
-        
-        // Step 5: Final verification
-        const { data: { session: finalSession } } = await supabase.auth.getSession();
-        if (finalSession) {
-          console.warn('⚠️ Session persists after cleanup, clearing localStorage one more time...');
-          const finalKeys = Object.keys(localStorage);
-          finalKeys.filter(key => key.startsWith('sb-')).forEach(key => {
-            localStorage.removeItem(key);
-          });
-        }
-        
-        // console.log('✅ Existing session cleared completely');
-        
-        // Small delay to ensure cleanup completes
-        await new Promise(resolve => setTimeout(resolve, 100));
       } catch (cleanupError) {
-        console.warn('⚠️ Session cleanup warning (non-fatal):', cleanupError);
-        // Manually clear localStorage anyway as fallback
-        try {
-          const allKeys = Object.keys(localStorage);
-          allKeys.filter(key => key.startsWith('sb-')).forEach(key => {
-            localStorage.removeItem(key);
-          });
-          sessionStorage.clear();
-        } catch (e) {
-          console.warn('⚠️ Manual cleanup failed:', e);
-        }
+        console.warn('⚠️ Cleanup warning (non-fatal):', cleanupError);
       }
       // console.log('🔍 Attempting to sign in with:', formData.email);
       // console.log('🔍 Supabase client:', supabase);
@@ -284,62 +181,86 @@ const Login = () => {
         return;
       }
 
-      // Get user role from our users table with proper error handling
-      // console.log('🔍 Querying users table for role...');
-      // console.log('🔍 User ID from auth:', authData.user.id);
-      // console.log('🔍 User email from auth:', authData.user.email);
-      
+      // Get user role from our users table with optimized query (single query with timeout)
       let userData = null;
       let userError = null;
 
       try {
-        // First try to find user by email (more reliable)
-        // console.log('🔍 Searching user by email...');
-        const { data: userByEmail, error: emailError } = await supabase
+        // Use Promise.race to add timeout to database query
+        const queryPromise = supabase
           .from('users')
           .select('id, role, full_name, firm_id, email, is_active')
           .eq('email', authData.user.email)
-          .single();
+          .maybeSingle(); // Use maybeSingle() to handle 0 rows gracefully
+        
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Database query timeout')), 5000)
+        );
+        
+        const { data: userByEmail, error: emailError } = await Promise.race([
+          queryPromise,
+          timeoutPromise
+        ]) as any;
 
         if (userByEmail && !emailError) {
-          // console.log('✅ User found by email:', userByEmail);
           userData = userByEmail;
-        } else {
-          // console.log('🔍 User not found by email, trying by ID...');
-          // Try by ID as fallback
-          const { data: userById, error: idError } = await supabase
-            .from('users')
-            .select('id, role, full_name, firm_id, email, is_active')
-            .eq('id', authData.user.id)
-            .single();
-
-          if (userById && !idError) {
-            // console.log('✅ User found by ID:', userById);
-            userData = userById;
-          } else {
-            // console.log('🔍 User not found in database, creating new record...');
-            // Create user record with no role - no dashboard access
-            const { data: newUser, error: createError } = await supabase
+        } else if (emailError && emailError.code !== 'PGRST116') {
+          // PGRST116 = no rows returned, which is fine - we'll create user
+          // Other errors are real problems
+          console.warn('⚠️ User query warning:', emailError);
+          
+          // Try by ID as fallback (with timeout)
+          try {
+            const idQueryPromise = supabase
+              .from('users')
+              .select('id, role, full_name, firm_id, email, is_active')
+              .eq('id', authData.user.id)
+              .maybeSingle();
+            
+            const { data: userById, error: idError } = await Promise.race([
+              idQueryPromise,
+              timeoutPromise
+            ]) as any;
+            
+            if (userById && !idError) {
+              userData = userById;
+            }
+          } catch (idError) {
+            console.warn('⚠️ ID query also failed:', idError);
+          }
+        }
+        
+        // If still no user data, create new record (only if needed)
+        if (!userData) {
+          try {
+            const createPromise = supabase
               .from('users')
               .insert([
                 {
                   id: authData.user.id,
                   email: authData.user.email,
                   full_name: authData.user.user_metadata?.full_name || 'User',
-                  role: null, // No role = No access
+                  role: null,
                   is_active: true
                 }
               ])
               .select()
               .single();
-
+            
+            const { data: newUser, error: createError } = await Promise.race([
+              createPromise,
+              timeoutPromise
+            ]) as any;
+            
             if (newUser && !createError) {
-              // console.log('✅ User record created successfully:', newUser);
               userData = newUser;
-            } else {
+            } else if (createError) {
               console.error('🚨 Error creating user record:', createError);
               userError = createError;
             }
+          } catch (createErr) {
+            console.error('🚨 Create user error:', createErr);
+            userError = createErr;
           }
         }
       } catch (error) {
@@ -394,13 +315,10 @@ const Login = () => {
       // console.log('🎯 User role for redirect:', userData.role);
       // console.log('🎯 Firm ID:', userData.firm_id);
       
-      // Clear cache on login to ensure fresh data
-      try {
-        const { clearCache } = await import('@/utils/cache');
-        clearCache();
-      } catch (cacheError) {
-        console.warn('⚠️ Cache clear error (non-fatal):', cacheError);
-      }
+      // CRITICAL: Don't clear cache on login - preserve metadata from previous session
+      // This allows instant loading of project cards, equipment metadata, etc.
+      // Cache will refresh naturally as user navigates
+      console.log('✅ Login successful - using preserved metadata cache for instant loading');
 
       // Store in localStorage with error handling
       try {

@@ -48,40 +48,27 @@ const ProjectHeader: React.FC<ProjectHeaderProps> = ({ loading, userName, userRo
     try {
       console.log('🚪 Logout initiated...');
       
-      // IMMEDIATE: Clear ALL storage first (but preserve critical caches)
-      // Use synchronous approach to preserve critical caches
-      const tabCounters = localStorage.getItem('epms_cache_tab_counters');
-      const summaryStats = localStorage.getItem('epms_cache_summary_stats');
-      const standaloneEquipment = localStorage.getItem('epms_cache_equipment_standalone');
-      // Preserve firm logo (priority loader - never clear)
-      const firmLogoKeys: string[] = [];
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key && key.startsWith('epms_cache_firm_logo_')) {
-          firmLogoKeys.push(key);
+      // CRITICAL: Preserve ALL metadata cache across sessions for faster login
+      // Only clear auth-related items, NOT metadata cache
+      const authKeys = [
+        'userData', 'userRole', 'userName', 'userEmail', 'firmId', 'userId',
+        'sb-access-token', 'sb-refresh-token'
+      ];
+      
+      // Clear only auth-related keys, preserve all cache (metadata)
+      const allKeys = Object.keys(localStorage);
+      allKeys.forEach(key => {
+        // Only remove auth-related keys, preserve all cache (metadata)
+        if (key.startsWith('sb-') || authKeys.includes(key)) {
+          localStorage.removeItem(key);
         }
-      }
-      const firmLogos: Record<string, string> = {};
-      firmLogoKeys.forEach(key => {
-        const value = localStorage.getItem(key);
-        if (value) firmLogos[key] = value;
-      });
-      
-      localStorage.clear();
-      
-      // Restore critical caches immediately
-      if (tabCounters) localStorage.setItem('epms_cache_tab_counters', tabCounters);
-      if (summaryStats) localStorage.setItem('epms_cache_summary_stats', summaryStats);
-      if (standaloneEquipment) localStorage.setItem('epms_cache_equipment_standalone', standaloneEquipment);
-      // Restore firm logos (priority loader - never clear)
-      Object.entries(firmLogos).forEach(([key, value]) => {
-        localStorage.setItem(key, value);
       });
       
       sessionStorage.clear();
       
+      console.log('✅ Logged out - ALL metadata cache preserved for next login');
+      
       // IMMEDIATE: Force redirect right away (don't wait for signOut)
-      console.log('✅ Clearing storage and redirecting immediately...');
       window.location.replace('/login');
       
       // Continue signOut in background (non-blocking)

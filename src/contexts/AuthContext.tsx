@@ -83,10 +83,24 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         setUserRole(null);
         setUserName(null);
         setFirmId(null);
-        // Clear cache on logout
-        const { clearCache } = await import('@/utils/cache');
-        clearCache();
-        localStorage.clear();
+        
+        // CRITICAL: Preserve metadata cache across sessions
+        // Only clear auth-related items, NOT metadata cache
+        const authKeys = [
+          'userData', 'userRole', 'userName', 'userEmail', 'firmId', 'userId',
+          'sb-access-token', 'sb-refresh-token'
+        ];
+        
+        // Clear Supabase auth tokens
+        const allKeys = Object.keys(localStorage);
+        allKeys.forEach(key => {
+          // Only remove auth-related keys, preserve all cache (metadata)
+          if (key.startsWith('sb-') || authKeys.includes(key)) {
+            localStorage.removeItem(key);
+          }
+        });
+        
+        sessionStorage.clear();
       }
       setLoading(false);
     });
@@ -154,10 +168,26 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       setUserRole(null);
       setUserName(null);
       setFirmId(null);
-      // Clear cache on logout
-      const { clearCache } = await import('@/utils/cache');
-      clearCache();
-      localStorage.clear();
+      
+      // CRITICAL: Preserve metadata cache across sessions for faster login
+      // Only clear auth-related items, NOT metadata cache
+      const authKeys = [
+        'userData', 'userRole', 'userName', 'userEmail', 'firmId', 'userId',
+        'sb-access-token', 'sb-refresh-token'
+      ];
+      
+      // Clear Supabase auth tokens
+      const allKeys = Object.keys(localStorage);
+      allKeys.forEach(key => {
+        // Only remove auth-related keys, preserve all cache (metadata)
+        if (key.startsWith('sb-') || authKeys.includes(key)) {
+          localStorage.removeItem(key);
+        }
+      });
+      
+      sessionStorage.clear();
+      
+      console.log('✅ Logged out - metadata cache preserved for next login');
     } catch (error) {
       console.error('Error signing out:', error);
     }

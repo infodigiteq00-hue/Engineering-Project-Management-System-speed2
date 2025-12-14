@@ -1228,18 +1228,18 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
           ? `${CACHE_KEYS.EQUIPMENT}_standalone`
           : `${CACHE_KEYS.EQUIPMENT}_${projectId}`;
         
-        // Helper function to create lightweight equipment metadata (include image/audio URLs - they're just strings, very lightweight)
+        // Helper function to create lightweight equipment metadata (no images/audio/documents)
         const createLightweightEquipment = (equipment: any[]) => {
           return equipment.map((eq: any) => ({
             ...eq,
-            // Keep metadata, include URLs (lightweight strings), exclude heavy base64 data
-            progress_images: [], // Don't cache full image arrays
+            // Keep only metadata, remove heavy data
+            progress_images: [], // Don't cache image URLs - load on-demand
             progress_images_metadata: eq.progress_images_metadata?.map((img: any) => ({
               id: img.id,
               description: img.description,
               uploaded_by: img.uploaded_by,
               upload_date: img.upload_date,
-              image_url: img.image_url || img.image, // Include image URL (just a string, ~300 bytes)
+              // Don't include image_url - load on-demand
             })) || [],
             progress_entries: eq.progress_entries?.map((entry: any) => ({
               id: entry.id,
@@ -1247,14 +1247,10 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
               date: entry.date || entry.created_at,
               type: entry.type,
               created_at: entry.created_at,
-              image_url: entry.image_url || entry.image, // Include image URL if exists (just a string)
-              audio_url: entry.audio_url || entry.audio, // Include audio URL if exists (just a string)
-              audio_duration: entry.audio_duration || entry.audioDuration, // Duration is just a number
-              // Don't include audio_data (base64) - that's heavy, load on-demand
+              // Don't include audio_data - load on-demand
             })) || [],
-            documents: [], // Don't cache document files - load on-demand
-            images: [], // Don't cache image files - load on-demand
-            // Image/audio URLs are lightweight (just strings), so we cache them for faster loading
+            documents: [], // Don't cache documents - load on-demand
+            images: [], // Don't cache images - load on-demand
           }));
         };
         
@@ -1483,7 +1479,7 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
               ? freshEquipment.slice(0, 24) // Limit to 24 for standalone
               : freshEquipment;
             
-            // Create lightweight version (metadata + URLs, no base64 data)
+            // Create lightweight version (metadata only)
             const lightweight = equipmentToCache.map((eq: any) => ({
               ...eq,
               progress_images: [],
@@ -1492,7 +1488,6 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
                 description: img.description,
                 uploaded_by: img.uploaded_by,
                 upload_date: img.upload_date,
-                image_url: img.image_url || img.image, // Include image URL (just a string, ~300 bytes)
               })) || [],
               progress_entries: eq.progress_entries?.map((entry: any) => ({
                 id: entry.id,
@@ -1500,10 +1495,6 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
                 date: entry.date || entry.created_at,
                 type: entry.type,
                 created_at: entry.created_at,
-                image_url: entry.image_url || entry.image, // Include image URL if exists
-                audio_url: entry.audio_url || entry.audio, // Include audio URL if exists
-                audio_duration: entry.audio_duration || entry.audioDuration,
-                // Don't include audio_data (base64) - that's heavy
               })) || [],
               documents: [],
               images: [],

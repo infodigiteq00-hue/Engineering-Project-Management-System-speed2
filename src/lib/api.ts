@@ -1974,28 +1974,33 @@ export const fastAPI = {
         url += `&created_at=lte.${endDate}`;
       }
       
-      // PERFORMANCE: Add timeout handling and retry logic (same as getAllProgressImages)
+      // PERFORMANCE: Add timeout handling and retry logic with exponential backoff
       let response;
       let retries = 0;
-      const maxRetries = 2;
+      const maxRetries = 1; // Reduced from 2 to 1 to fail faster and reduce backend load
       
       while (retries <= maxRetries) {
         try {
-          response = await api.get(url, { timeout: 20000 }); // 20 second timeout
+          // PERFORMANCE: Reduced timeout from 20s to 15s to fail faster
+          response = await api.get(url, { timeout: 15000 }); // 15 second timeout
           break; // Success, exit retry loop
         } catch (error: any) {
-          // Check if it's a timeout error
-          if (error?.code === 'ECONNABORTED' || error?.response?.data?.code === '57014' || error?.response?.status === 500) {
+          // Check if it's a timeout or server error
+          const isTimeout = error?.code === 'ECONNABORTED' || error?.response?.data?.code === '57014';
+          const isServerError = error?.response?.status === 500 || error?.response?.status === 503;
+          
+          if (isTimeout || isServerError) {
             retries++;
             if (retries > maxRetries) {
-              console.error('❌ Error fetching all progress entries: Query timeout after retries', error);
+              // Silently fail - don't spam console
               return []; // Return empty array instead of crashing
             }
-            // Wait before retry (exponential backoff)
-            await new Promise(resolve => setTimeout(resolve, 1000 * retries));
+            // Exponential backoff: 2s, 4s (increased from 1s, 2s)
+            await new Promise(resolve => setTimeout(resolve, 2000 * retries));
             continue;
           }
-          throw error; // Re-throw if not a timeout
+          // For other errors (4xx, network), fail immediately without retry
+          return [];
         }
       }
       
@@ -2114,28 +2119,33 @@ export const fastAPI = {
         url += `&created_at=lte.${endDate}`;
       }
       
-      // PERFORMANCE: Add timeout handling and retry logic
+      // PERFORMANCE: Add timeout handling and retry logic with exponential backoff
       let response;
       let retries = 0;
-      const maxRetries = 2;
+      const maxRetries = 1; // Reduced from 2 to 1 to fail faster and reduce backend load
       
       while (retries <= maxRetries) {
         try {
-          response = await api.get(url, { timeout: 20000 }); // 20 second timeout
+          // PERFORMANCE: Reduced timeout from 20s to 15s to fail faster
+          response = await api.get(url, { timeout: 15000 }); // 15 second timeout
           break; // Success, exit retry loop
         } catch (error: any) {
-          // Check if it's a timeout error
-          if (error?.code === 'ECONNABORTED' || error?.response?.data?.code === '57014' || error?.response?.status === 500) {
+          // Check if it's a timeout or server error
+          const isTimeout = error?.code === 'ECONNABORTED' || error?.response?.data?.code === '57014';
+          const isServerError = error?.response?.status === 500 || error?.response?.status === 503;
+          
+          if (isTimeout || isServerError) {
             retries++;
             if (retries > maxRetries) {
-              console.error('❌ Error fetching progress images: Query timeout after retries', error);
+              // Silently fail - don't spam console
               return []; // Return empty array instead of crashing
             }
-            // Wait before retry (exponential backoff)
-            await new Promise(resolve => setTimeout(resolve, 1000 * retries));
+            // Exponential backoff: 2s, 4s (increased from 1s, 2s)
+            await new Promise(resolve => setTimeout(resolve, 2000 * retries));
             continue;
           }
-          throw error; // Re-throw if not a timeout
+          // For other errors (4xx, network), fail immediately without retry
+          return [];
         }
       }
       
